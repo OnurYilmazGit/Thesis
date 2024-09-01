@@ -65,7 +65,7 @@ def main():
     start_time = time.time()
     print("\n=== Step 2: Feature Engineering and Normalization ===")
     
-    preprocessor = DataPreprocessor(data, window_size=10)
+    preprocessor = DataPreprocessor(data, window_size=20)
     data = preprocessor.feature_engineering()
     
     feature_columns = [col for col in data.columns if col not in ['Time', 'Node', 'Value', 'Cluster']]
@@ -188,7 +188,7 @@ def main():
     print(f"Evaluation completed in {execution_times['Evaluation on Full Data']:.2f} seconds.")
     print(f"Accuracy of core set model on full PCA-reduced data: {accuracy_full_core:.4f}")
     
-     # =========================
+    # =========================
     # Step 8: Summary of Results
     # =========================
     print("\n=== Step 8: Summary of Results ===")
@@ -217,7 +217,7 @@ def main():
     # Plotting Clusters and Core Set
     print("\n=== Visualizing Clusters and Core Set ===")
     visualization.plot_clusters(X_pca, data['Cluster'])
-    visualization.plot_core_set(X_pca[core_set_indices], data['Cluster'][core_set_indices])
+    visualization.plot_core_set(X_core, core_set['Cluster'])
 
     # =========================
     # Display All Plots Together
@@ -236,7 +236,6 @@ def main():
 
     plt.tight_layout()
     plt.show()
-
 
 if __name__ == "__main__":
     main()
