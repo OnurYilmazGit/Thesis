@@ -65,7 +65,7 @@ def main():
     start_time = time.time()
     print("\n=== Step 2: Feature Engineering and Normalization ===")
     
-    preprocessor = DataPreprocessor(data, window_size=20)
+    preprocessor = DataPreprocessor(data, window_size=10)
     data = preprocessor.feature_engineering()
     
     feature_columns = [col for col in data.columns if col not in ['Time', 'Node', 'Value', 'Cluster']]
@@ -114,7 +114,7 @@ def main():
     
     X_train_full, X_test_full, y_train_full, y_test_full = train_test_split(X_pca, y, test_size=0.2, random_state=42)
     
-    rf_full = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+    rf_full = RandomForestClassifier(n_estimators=50, n_jobs=-1, random_state=42)
     rf_full.fit(X_train_full, y_train_full)
     
     y_pred_full = rf_full.predict(X_test_full)
@@ -136,10 +136,10 @@ def main():
     optimal_k = preprocessor.optimize_cluster_selection(X_pca, max_clusters=10)
     print(f"Optimal number of clusters determined: {optimal_k}")
     
-    core_set_indices = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=20).index.tolist()
+    core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=20)
     
-    X_core = X_pca[core_set_indices]  # Convert to list for valid indexing
-    y_core = y.iloc[core_set_indices]
+    X_core = X_pca[core_set.index]  
+    y_core = core_set['Value']
     
     core_set_size = X_core.nbytes / 1024  # in KB
     reduction_factor = X_pca.shape[0] / X_core.shape[0]
@@ -188,11 +188,16 @@ def main():
     print(f"Evaluation completed in {execution_times['Evaluation on Full Data']:.2f} seconds.")
     print(f"Accuracy of core set model on full PCA-reduced data: {accuracy_full_core:.4f}")
     
-    # =========================
+     # =========================
     # Step 8: Summary of Results
     # =========================
     print("\n=== Step 8: Summary of Results ===")
-    
+
+    # Compression Ratios
+    compression_ratio_pca = original_data_size / reduced_data_size
+    compression_ratio_core = original_data_size / core_set_size
+
+    # Summary of results
     summary_df = pd.DataFrame({
         'Dataset': ['Full Data', 'Core Set', 'Core Model on Full Data'],
         'Samples': [X_pca.shape[0], X_core.shape[0], X_pca.shape[0]],
@@ -203,28 +208,35 @@ def main():
             execution_times['Random Forest (Full Data)'],
             execution_times['Random Forest (Core Set)'],
             'N/A'
-        ]
+        ],
+        'Compression Ratio': [compression_ratio_pca, compression_ratio_core, 'N/A']
     })
-    
+
     print(summary_df.to_string(index=False))
-    
+
+    # Plotting Clusters and Core Set
+    print("\n=== Visualizing Clusters and Core Set ===")
+    visualization.plot_clusters(X_pca, data['Cluster'])
+    visualization.plot_core_set(X_pca[core_set_indices], data['Cluster'][core_set_indices])
+
     # =========================
     # Display All Plots Together
     # =========================
     print("\n=== Displaying All Plots ===")
-    
+
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
     plot_files = ['confusion_matrix_full.png', 'confusion_matrix_core.png', 'confusion_matrix_full_core.png']
     titles = ['Random Forest (Full Data)', 'Random Forest (Core Set)', 'Core Set Model on Full Data']
-    
+
     for ax, file, title in zip(axes, plot_files, titles):
         img = plt.imread(file)
         ax.imshow(img)
         ax.axis('off')
         ax.set_title(title)
-    
+
     plt.tight_layout()
     plt.show()
+
 
 if __name__ == "__main__":
     main()
