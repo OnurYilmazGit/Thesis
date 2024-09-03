@@ -24,11 +24,20 @@ class DataPreprocessor:
         logging.info("Starting feature engineering")
         time_col = pd.to_datetime(self.data['Time'], unit='ns')
         self.data['minute'] = time_col.dt.minute
-        
-        # Create rolling features and the difference feature
-        rolling_mean = self.data['Value'].rolling(window=self.window_size).mean().rename('Value_mean')
-        rolling_std = self.data['Value'].rolling(window=self.window_size).std().rename('Value_std')
-        diff_feature = self.data['Value'].diff().rename('Value_diff')
+
+        def calculate_rolling_mean():
+            return self.data['Value'].rolling(window=self.window_size).mean().rename('Value_mean')
+
+        def calculate_rolling_std():
+            return self.data['Value'].rolling(window=self.window_size).std().rename('Value_std')
+
+        def calculate_diff():
+            return self.data['Value'].diff().rename('Value_diff')
+
+        # Parallelize the feature calculation
+        rolling_mean, rolling_std, diff_feature = Parallel(n_jobs=-1)(
+            delayed(func)() for func in [calculate_rolling_mean, calculate_rolling_std, calculate_diff]
+        )
 
         # Concatenate features
         features_df = pd.concat([rolling_mean, rolling_std, diff_feature], axis=1)
@@ -41,7 +50,15 @@ class DataPreprocessor:
         """Scale the data using StandardScaler."""
         logging.info("Normalizing data")
         X = self.data[feature_columns].to_numpy(dtype=np.float32)
-        return self.scaler.fit_transform(X)
+        
+        # Parallelize the scaling process (Note: StandardScaler is already highly optimized and parallelized internally,
+        # but for demonstration purposes, you could wrap this in a parallel operation if needed)
+        X_scaled = Parallel(n_jobs=-1)(delayed(self.scaler.fit_transform)(X_chunk) for X_chunk in np.array_split(X, 4))
+
+        # Concatenate back into a single array
+        X_scaled = np.concatenate(X_scaled, axis=0)
+        return X_scaled
+
 
     def apply_pca(self, X_scaled, n_components=None):
         """Apply PCA to the scaled data."""
@@ -54,13 +71,13 @@ class DataPreprocessor:
         X_pca = pca.fit_transform(X_scaled)
         return X_pca, pca
 
-    def optimize_cluster_selection(self, X_pca, max_clusters=None):
+    def optimize_cluster_selection(self, X_pca, max_clusters=200):
         """Determine the optimal number of clusters using the elbow method."""
         logging.info("Optimizing cluster selection using the elbow method")
         inertia = []
         K = range(2, max_clusters + 1)
         for k in K:
-            kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=100)
+            kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=200)
             kmeans.fit(X_pca)
             inertia.append(kmeans.inertia_)
         
@@ -74,7 +91,7 @@ class DataPreprocessor:
         elbow_index = np.argmax(second_derivatives) + 2
         return K[elbow_index]
 
-    def refine_cluster_selection(self, X_pca, n_clusters=10, points_per_cluster=2):
+    def refine_cluster_selection(self, X_pca, n_clusters=20, points_per_cluster=20):
         """Refine the cluster selection by choosing representative points."""
         logging.info(f"Refining cluster selection with {n_clusters} clusters")
         kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42)
