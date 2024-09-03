@@ -45,7 +45,8 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(3)]  # Adjusted node count
+    nodes = [f'node{i}' for i in range(16)]  # Adjusted node count
+    print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
     responses = data_loader.load_responses()
@@ -133,10 +134,11 @@ def main():
     # ==============================================
     print("\n=== Step 5: K-Means Clustering for Core Set Selection ===")
     
-    optimal_k = preprocessor.optimize_cluster_selection(X_pca, max_clusters=10)
+    #optimal_k = preprocessor.optimize_cluster_selection(X_pca, max_clusters=200)
+    optimal_k = 100
     print(f"Optimal number of clusters determined: {optimal_k}")
     
-    core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=20)
+    core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=25)
     
     X_core = X_pca[core_set.index]  
     y_core = core_set['Value']
@@ -157,7 +159,7 @@ def main():
     
     X_train_core, X_test_core, y_train_core, y_test_core = train_test_split(X_core, y_core, test_size=0.2, random_state=42)
     
-    rf_core = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+    rf_core = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
     rf_core.fit(X_train_core, y_train_core)
     
     y_pred_core = rf_core.predict(X_test_core)
@@ -169,7 +171,7 @@ def main():
     end_time = time.time()
     execution_times['Random Forest (Core Set)'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Random Forest (Core Set)']:.2f} seconds.")
-    print(f"Accuracy on core set test data: {accuracy_core:.4f}")
+    print(f"Accuracy on core set test data: {accuracy_core:.4f}")   
     
     # =============================================
     # Step 7: Evaluating Core Set Model on Full Data
