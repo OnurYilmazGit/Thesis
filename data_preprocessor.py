@@ -20,28 +20,53 @@ class DataPreprocessor:
         self.scaler = StandardScaler()
 
     def feature_engineering(self):
-        """Create features such as rolling mean, std, and diff based on a window size."""
+        """Create features such as lagged values and differences based on seconds."""
         logging.info("Starting feature engineering")
-        time_col = pd.to_datetime(self.data['Time'], unit='ns')
-        self.data['minute'] = time_col.dt.minute
+        
+        # Log the initial shape of the data
+        print(f"Initial data shape: {self.data.shape}")
 
-        def calculate_rolling_mean():
-            return self.data['Value'].rolling(window=self.window_size).mean().rename('Value_mean')
+        # Create time-based features focused on seconds
+        time_col = pd.to_datetime(self.data['Time'], unit='s')
+        self.data['second'] = time_col.dt.second
+        #print(f"After creating second, data shape: {self.data.shape}")
 
-        def calculate_rolling_std():
-            return self.data['Value'].rolling(window=self.window_size).std().rename('Value_std')
+        # Lag features to capture past values
+        for lag in range(1, 10):  # Create lag features for 1 to 10 seconds
+            self.data[f'lag_{lag}'] = self.data['Value'].shift(lag)
+            #print(f"After creating lag_{lag}, data shape: {self.data.shape}")
 
-        def calculate_diff():
-            return self.data['Value'].diff().rename('Value_diff')
+        # Difference between consecutive values to capture changes
+        for lag in range(1, 10):  # Create diff features for 1 to 10 seconds
+            self.data[f'diff_{lag}'] = self.data['Value'].diff(lag)
+            #print(f"After creating diff_{lag}, data shape: {self.data.shape}")
 
-        # Parallelize the feature calculation
-        rolling_mean, rolling_std, diff_feature = Parallel(n_jobs=-1)(
-            delayed(func)() for func in [calculate_rolling_mean, calculate_rolling_std, calculate_diff]
-        )
+        # Option 1: Fill NaN values instead of dropping them
+        #self.data.fillna(0, inplace=True)
+        
+        # Option 2: Use forward fill/backward fill (if applicable)
+        self.data.fillna(method='ffill', inplace=True)
+        self.data.fillna(method='bfill', inplace=True)
+        
+        # Log the final shape of the data
+        #print(f"After filling NA, data shape: {self.data.shape}")
 
-        # Concatenate features
-        features_df = pd.concat([rolling_mean, rolling_std, diff_feature], axis=1)
-        self.data = pd.concat([self.data, features_df], axis=1).fillna(method='bfill').fillna(method='ffill')
+        # Log and store data snapshot if needed
+        if self.data.empty:
+            self.data.to_csv("empty_data_snapshot.csv", index=False)
+            raise ValueError("Data is empty after feature engineering. Check data processing steps.")
+
+        # Visualize rolling statistics
+        rolling_mean = self.data['Value'].rolling(window=self.window_size).mean()
+        rolling_std = self.data['Value'].rolling(window=self.window_size).std()
+        #self.visualization.plot_rolling_statistics(self.data['Value'], rolling_mean, rolling_std, self.window_size)
+
+        # Visualize the difference feature
+        #self.visualization.plot_difference(self.data['Value'], self.data['diff_1'])
+
+        # Visualize autocorrelation and partial autocorrelation
+        #self.visualization.plot_acf(self.data)
+        #self.visualization.plot_pacf(self.data)
 
         logging.info("Feature engineering completed")
         return self.data
@@ -99,6 +124,12 @@ class DataPreprocessor:
 
         core_set_indices = self._select_core_points(n_clusters, points_per_cluster)
         core_set = self.data.loc[core_set_indices]
+
+        # Plot cluster assignments and centroids
+        self.visualization.plot_clusters(X_pca, self.data['Cluster'])
+        centroids = kmeans.cluster_centers_
+        self.visualization.plot_centroids(centroids)
+
         return core_set
 
     def _select_core_points(self, n_clusters, points_per_cluster):
