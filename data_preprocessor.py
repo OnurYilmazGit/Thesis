@@ -82,6 +82,9 @@ class DataPreprocessor:
 
         # Concatenate back into a single array
         X_scaled = np.concatenate(X_scaled, axis=0)
+        
+        # Export X_scaled as csv for debugging
+        #pd.DataFrame(X_scaled).to_csv('X_scaled.csv', index=False)
         return X_scaled
 
 
@@ -115,22 +118,38 @@ class DataPreprocessor:
         second_derivatives = np.diff(derivatives)
         elbow_index = np.argmax(second_derivatives) + 2
         return K[elbow_index]
-
+        
     def refine_cluster_selection(self, X_pca, n_clusters=20, points_per_cluster=20):
         """Refine the cluster selection by choosing representative points."""
         logging.info(f"Refining cluster selection with {n_clusters} clusters")
+
+        # Apply KMeans clustering
         kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42)
         self.data['Cluster'] = kmeans.fit_predict(X_pca)
 
+        # Ensure 'Time' is parsed as a full datetime object (with hour, minute, second precision)
+        self.data['Time'] = pd.to_datetime(self.data['Time'], format='%Y-%m-%d %H:%M:%S')
+
+        # Select core set points from each cluster
         core_set_indices = self._select_core_points(n_clusters, points_per_cluster)
         core_set = self.data.loc[core_set_indices]
 
-        # Plot cluster assignments and centroids
+        # Sort core set by the full 'Time' column, including second precision
+        core_set_sorted = core_set.sort_values(by='Time')
+
+        # Export core set sorted by Time
+        core_set_sorted.to_csv('core_set_export_sorted.csv', index=False)
+
+        # Visualize clusters
         self.visualization.plot_clusters(X_pca, self.data['Cluster'])
         centroids = kmeans.cluster_centers_
         self.visualization.plot_centroids(centroids)
 
-        return core_set
+        logging.info("Core set exported with multiple nodes, sorted by Time (including seconds).")
+
+        return core_set_sorted
+
+
 
     def _select_core_points(self, n_clusters, points_per_cluster):
         """Select representative points per cluster."""
