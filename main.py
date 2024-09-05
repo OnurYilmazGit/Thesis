@@ -45,7 +45,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(4)]  # Adjusted node count
+    nodes = [f'node{i}' for i in range(16)]  # Adjusted node count
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -80,8 +80,8 @@ def main():
     y = data['Value']
 
     # Plot ACF and PACF to choose lag values
-    visualization.plot_acf(data)
-    visualization.plot_pacf(data)
+    #visualization.plot_acf(data)
+    #visualization.plot_pacf(data)
 
     X_scaled = preprocessor.normalize_data(feature_columns)
 
@@ -103,9 +103,9 @@ def main():
     X_pca, pca_model = preprocessor.apply_pca(X_scaled, n_components=None)
     
     cumulative_variance = np.cumsum(pca_model.explained_variance_ratio_)
-    optimal_components = np.argmax(cumulative_variance >= 0.90) + 1  # +1 because indices start at 0
+    optimal_components = np.argmax(cumulative_variance >= 0.18) + 1  # +1 because indices start at 0
     
-    print(f"Optimal number of PCA components to retain 91% variance: {optimal_components}")
+    print(f"Optimal number of PCA components to retain 30% variance: {optimal_components}")
     
     # Re-apply PCA with optimal components
     X_pca, pca_model = preprocessor.apply_pca(X_scaled, n_components= optimal_components)
@@ -135,7 +135,7 @@ def main():
     accuracy_full = accuracy_score(y_test_full, y_pred_full)
 
     conf_matrix_full = confusion_matrix(y_test_full, y_pred_full)
-    plot_confusion_matrix(conf_matrix_full, class_names, "Confusion Matrix - Random Forest (Full Data)", "confusion_matrix_full.png")
+    #plot_confusion_matrix(conf_matrix_full, class_names, "Confusion Matrix - Random Forest (Full Data)", "confusion_matrix_full.png")
 
     end_time = time.time()
     execution_times['Random Forest (Full Data)'] = end_time - start_time
@@ -148,10 +148,10 @@ def main():
     print("\n=== Step 5: K-Means Clustering for Core Set Selection ===")
 
     #optimal_k = preprocessor.optimize_cluster_selection(X_pca, max_clusters=200)
-    optimal_k = 100
+    optimal_k = 200
     print(f"Optimal number of clusters determined: {optimal_k}")
 
-    core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=25)
+    core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=15)
 
     X_core = X_pca[core_set.index]  
     y_core = core_set['Value']
@@ -179,7 +179,7 @@ def main():
     accuracy_core = accuracy_score(y_test_core, y_pred_core)
 
     conf_matrix_core = confusion_matrix(y_test_core, y_pred_core)
-    plot_confusion_matrix(conf_matrix_core, class_names, "Confusion Matrix - Random Forest (Core Set)", "confusion_matrix_core.png")
+   #plot_confusion_matrix(conf_matrix_core, class_names, "Confusion Matrix - Random Forest (Core Set)", "confusion_matrix_core.png")
 
     end_time = time.time()
     execution_times['Random Forest (Core Set)'] = end_time - start_time
@@ -196,7 +196,7 @@ def main():
     accuracy_full_core = accuracy_score(y, y_pred_full_core)
 
     conf_matrix_full_core = confusion_matrix(y, y_pred_full_core)
-    plot_confusion_matrix(conf_matrix_full_core, class_names, "Confusion Matrix - Core Set Model on Full Data", "confusion_matrix_full_core.png")
+    #plot_confusion_matrix(conf_matrix_full_core, class_names, "Confusion Matrix - Core Set Model on Full Data", "confusion_matrix_full_core.png")
 
     end_time = time.time()
     execution_times['Evaluation on Full Data'] = end_time - start_time
