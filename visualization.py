@@ -3,6 +3,9 @@ import seaborn as sns
 import numpy as np
 from pandas.plotting import lag_plot
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
 
 class Visualization:
     def __init__(self):
@@ -239,3 +242,58 @@ class Visualization:
         self._initialize_plot('Elbow Method for Optimal K', xlabel='Number of clusters', ylabel='Inertia')
         plt.plot(K, inertia, marker='o')
         plt.show()
+
+    def plot_seasonal_decomposition(self, time_series, frequency=12, title="Seasonality, Trend, and Noise"):
+        """Plot seasonal decomposition of time series."""
+        decomposition = seasonal_decompose(time_series, period=frequency)
+        decomposition.plot()
+        plt.suptitle(title)
+        plt.show()
+
+    def plot_autocorrelation(self, data, lags=50, title="Autocorrelation"):
+        """Plot autocorrelation for the given data."""
+        plt.figure(figsize=(10, 6))
+        plot_acf(data, lags=lags)
+        plt.title(title)
+        plt.show()
+
+    def plot_partial_autocorrelation(self, data, lags=50, title="Partial Autocorrelation"):
+        """Plot partial autocorrelation for the given data."""
+        plt.figure(figsize=(10, 6))
+        plot_pacf(data, lags=lags)
+        plt.title(title)
+        plt.show()
+
+from sklearn.manifold import TSNE
+
+def plot_tsne(X_full, X_core, y_full, y_core, class_names, filename):
+    """Function to plot t-SNE visualization comparing full and core datasets."""
+    print("\n=== Step 8: t-SNE Visualization ===")
+    
+    # Initialize t-SNE for 2D visualization
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+    
+    # Fit t-SNE on full and core datasets
+    X_full_tsne = tsne.fit_transform(X_full)
+    X_core_tsne = tsne.fit_transform(X_core)
+    
+    # Create a figure for t-SNE comparison
+    plt.figure(figsize=(10, 8))
+
+    # Plot t-SNE for full dataset
+    plt.scatter(X_full_tsne[:, 0], X_full_tsne[:, 1], c=y_full, cmap='tab10', alpha=0.4, label="Full Dataset", s=10)
+
+    # Overlay t-SNE for core dataset
+    plt.scatter(X_core_tsne[:, 0], X_core_tsne[:, 1], c=y_core, cmap='tab10', edgecolor='black', label="Core Dataset", s=40)
+    
+    # Add title and legend
+    plt.title("t-SNE Visualization of Full and Core Datasets")
+    plt.legend(loc='best')
+    plt.xlabel('t-SNE Component 1')
+    plt.ylabel('t-SNE Component 2')
+    
+    # Save the figure
+    plt.savefig(filename)
+    plt.close()
+
+    print(f"t-SNE plot saved as {filename}")
