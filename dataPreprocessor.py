@@ -1,9 +1,10 @@
-# data_preprocessor.py
+# dataPreprocessor.py
 
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.model_selection import StratifiedShuffleSplit
 import logging
 from joblib import Parallel, delayed
 
@@ -53,62 +54,36 @@ class DataPreprocessor:
         X_scaled = self.scaler.fit_transform(X)
         return X_scaled
 
-    def compute_average_path_length(self, rf, X):
-        """
-        Compute average path length for each sample in Random Forest.
+    def select_features(self, X, y, k=50):
+        """Select top k features based on ANOVA F-score."""
+        logging.info(f"Selecting top {k} features")
+        selector = SelectKBest(f_classif, k=k)
+        X_new = selector.fit_transform(X, y)
+        selected_features = selector.get_support(indices=True)
+        return X_new, selected_features
 
-        Args:
-            rf (RandomForestClassifier): Trained Random Forest model.
-            X (array-like): Feature matrix.
-
-        Returns:
-            avg_path_lengths (array): Average path lengths for each sample.
-        """
-        n_samples = X.shape[0]
-        n_estimators = len(rf.estimators_)
-
-        def compute_path_length_for_tree(tree):
-            decision_paths = tree.decision_path(X)
-            return decision_paths.sum(axis=1).A1  # sum over nodes in path
-
-        # Use Parallel to compute path lengths in parallel
-        path_lengths_list = Parallel(n_jobs=-1)(
-            delayed(compute_path_length_for_tree)(tree) for tree in rf.estimators_
-        )
-
-        # Sum path lengths over all trees
-        path_lengths = np.sum(path_lengths_list, axis=0)
-
-        avg_path_lengths = path_lengths / n_estimators
-        return avg_path_lengths
-
-    def select_core_set_by_rf(self, X_scaled, y, compression_ratio=0.3):
-        logging.info("Selecting core set based on prediction entropy.")
-
-        # Use a simpler Random Forest for importance computation
-        rf_full = RandomForestClassifier(
-            n_jobs=-1,
-            random_state=42
-        )
-        rf_full.fit(X_scaled, y)
-
-        # Get predicted probabilities
-        proba = rf_full.predict_proba(X_scaled)
-
-        # Compute entropy
-        entropy_scores = -np.sum(proba * np.log(proba + 1e-9), axis=1)
-
-        # Normalize entropy scores
-        entropy_scores_normalized = entropy_scores / np.sum(entropy_scores)
-
-        # Select top samples based on entropy
+    def select_core_set_by_rf(self, X_scaled, y, data, compression_ratio=0.01):
+        """Select core set using stratified sampling to ensure class balance."""
+        logging.info("Selecting core set using stratified sampling based on compression ratio.")
+        
+        # Compute the number of samples per class
+        class_counts = y.value_counts()
+        min_samples_per_class = 10  # Set a reasonable minimum
         n_core_samples = int(len(X_scaled) * compression_ratio)
-        indices_sorted = np.argsort(-entropy_scores_normalized)
-        core_indices = indices_sorted[:n_core_samples]
-        core_set = self.data.iloc[core_indices]
 
-        logging.info(f"Core set selected with {n_core_samples} samples.")
+        # Adjust n_core_samples if necessary
+        n_classes = len(class_counts)
+        if n_core_samples < n_classes * min_samples_per_class:
+            n_core_samples = n_classes * min_samples_per_class
 
-        return core_set
+        # Stratified sampling
+        sss = StratifiedShuffleSplit(n_splits=1, train_size=n_core_samples, random_state=42)
+        for core_indices, _ in sss.split(X_scaled, y):
+            core_set = data.iloc[core_indices].copy()
+            X_core = X_scaled[core_indices]
+            y_core = y.iloc[core_indices].reset_index(drop=True)
+            break
 
+        logging.info(f"Core set selected with {len(core_indices)} samples.")
 
+        return core_set, X_core, y_core
