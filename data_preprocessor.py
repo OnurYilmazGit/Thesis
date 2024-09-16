@@ -29,7 +29,7 @@ class DataPreprocessor:
         # Create time-based features focused on seconds
         time_col = pd.to_datetime(self.data['Time'], unit='s')
         self.data['second'] = time_col.dt.second
-        #print(f"After creating second, data shape: {self.data.shape}")
+
 
         # Lag features to capture past values
         for lag in range(1, 10):  # Create lag features for 1 to 10 seconds
@@ -40,33 +40,15 @@ class DataPreprocessor:
         for lag in range(1, 10):  # Create diff features for 1 to 10 seconds
             self.data[f'diff_{lag}'] = self.data['Value'].diff(lag)
             #print(f"After creating diff_{lag}, data shape: {self.data.shape}")
-
-        # Option 1: Fill NaN values instead of dropping them
-        #self.data.fillna(0, inplace=True)
         
         # Option 2: Use forward fill/backward fill (if applicable)
         self.data.fillna(method='ffill', inplace=True)
         self.data.fillna(method='bfill', inplace=True)
-        
-        # Log the final shape of the data
-        #print(f"After filling NA, data shape: {self.data.shape}")
 
         # Log and store data snapshot if needed
         if self.data.empty:
             self.data.to_csv("empty_data_snapshot.csv", index=False)
             raise ValueError("Data is empty after feature engineering. Check data processing steps.")
-
-        # Visualize rolling statistics
-        rolling_mean = self.data['Value'].rolling(window=self.window_size).mean()
-        rolling_std = self.data['Value'].rolling(window=self.window_size).std()
-        #self.visualization.plot_rolling_statistics(self.data['Value'], rolling_mean, rolling_std, self.window_size)
-
-        # Visualize the difference feature
-        #self.visualization.plot_difference(self.data['Value'], self.data['diff_1'])
-
-        # Visualize autocorrelation and partial autocorrelation
-        #self.visualization.plot_acf(self.data)
-        #self.visualization.plot_pacf(self.data)
 
         logging.info("Feature engineering completed")
         return self.data
@@ -97,6 +79,8 @@ class DataPreprocessor:
             pca = PCA(n_components=n_components)
 
         X_pca = pca.fit_transform(X_scaled)
+
+        self.visualization.plot_pca_variance(pca)
         return X_pca, pca
 
     def optimize_cluster_selection(self, X_pca, max_clusters=200):
@@ -119,7 +103,7 @@ class DataPreprocessor:
         elbow_index = np.argmax(second_derivatives) + 2
         return K[elbow_index]
         
-    def refine_cluster_selection(self, X_pca, n_clusters=20, points_per_cluster=20):
+    def refine_cluster_selection(self, X_pca, n_clusters=500, points_per_cluster=20):
         """Refine the cluster selection by choosing representative points."""
         logging.info(f"Refining cluster selection with {n_clusters} clusters")
 
@@ -148,7 +132,6 @@ class DataPreprocessor:
         logging.info("Core set exported with multiple nodes, sorted by Time (including seconds).")
 
         return core_set_sorted
-
 
 
     def _select_core_points(self, n_clusters, points_per_cluster):
@@ -192,3 +175,24 @@ class DataPreprocessor:
         if runtime > time_limit:
             logging.warning(f"Configuration with max_clusters={max_clusters}, points_per_cluster={points_per_cluster} exceeded time limit.")
         return max_clusters, points_per_cluster, accuracy, runtime
+    
+
+    def remove_outliers_iqr(self):
+        """Remove outliers using the IQR method on numeric columns."""
+        print("Removing outliers using the IQR method.")
+
+        # Select only numeric columns
+        numeric_cols = self.data.select_dtypes(include=[np.number])
+
+        # Calculate the IQR for each numeric column
+        Q1 = numeric_cols.quantile(0.25)
+        Q3 = numeric_cols.quantile(0.75)
+        IQR = Q3 - Q1
+
+        # Remove rows that contain outliers
+        self.data = self.data[~((numeric_cols < (Q1 - 1.5 * IQR)) | (numeric_cols > (Q3 + 1.5 * IQR))).any(axis=1)]
+
+        # Reset the index after outlier removal
+        self.data.reset_index(drop=True, inplace=True)
+
+        print(f"Data shape after outlier removal: {self.data.shape}")

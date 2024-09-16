@@ -18,15 +18,22 @@ class PDF(FPDF):
         self.ln()
 
     def add_image(self, image_path, width, height):
-        self.image(image_path, x=None, y=None, w=width, h=height)
+        if os.path.exists(image_path):
+            self.image(image_path, x=None, y=None, w=width, h=height)
+        else:
+            print(f"Warning: The image at {image_path} was not found.")
         self.ln()
 
 class ReportGenerator:
-    def __init__(self, results, model_name, data_type='real', compression_ratio=None):
+    def __init__(self, results, model_name, data_type='real', compression_ratio=None, original_data_size=None, smote_data_size=None, enn_data_size=None, num_nodes=None):
         self.results = results
         self.model_name = model_name
         self.data_type = data_type  # 'real' or 'synthetic'
         self.compression_ratio = compression_ratio
+        self.original_data_size = original_data_size
+        self.smote_data_size = smote_data_size
+        self.enn_data_size = enn_data_size
+        self.num_nodes = num_nodes
 
     @staticmethod
     def save_with_incremental_filename(path, extension=".pdf"):
@@ -37,7 +44,7 @@ class ReportGenerator:
             counter += 1
         return path
 
-    def generate_pdf(self, image_dir, save_dir):
+    def generate_pdf(self, output_dir, save_dir):
         pdf = PDF()
         pdf.add_page()
         pdf.chapter_title('Introduction')
@@ -47,10 +54,33 @@ class ReportGenerator:
         pdf.chapter_body(f'The dataset contains sensor data and response values from multiple nodes.')
         if self.compression_ratio is not None:
             pdf.chapter_body(f"Compression Ratio: {self.compression_ratio:.2f}")
+        if self.original_data_size is not None:
+            pdf.chapter_body(f"Original Data Size: {self.original_data_size}")
+        if self.smote_data_size is not None:
+            pdf.chapter_body(f"SMOTE Data Size: {self.smote_data_size}")
+        if self.enn_data_size is not None:
+            pdf.chapter_body(f"ENN Data Size: {self.enn_data_size}")
+        if self.num_nodes is not None:
+            pdf.chapter_body(f"Number of Nodes: {self.num_nodes}")
 
         pdf.chapter_title(f'{self.model_name} Results ({self.data_type.capitalize()} Data)')
-        pdf.add_image(os.path.join(image_dir, f'{self.model_name}_confusion_matrix_{self.data_type}.png'), width=180, height=100)
-        pdf.add_image(os.path.join(image_dir, f'{self.model_name}_classification_report_{self.data_type}.png'), width=180, height=100)
+
+        # Paths for images
+        confusion_matrix_path = os.path.join(output_dir, f'{self.model_name}_confusion_matrix_{self.data_type}.png')
+        classification_report_path = os.path.join(output_dir, f'{self.model_name}_classification_report_{self.data_type}.png')
+
+        # Save images and check existence
+        if os.path.exists(confusion_matrix_path):
+            print(f"Adding image {confusion_matrix_path} to PDF...")
+            pdf.add_image(confusion_matrix_path, width=180, height=100)
+        else:
+            print(f"Error: Confusion matrix image not found at {confusion_matrix_path}")
+
+        if os.path.exists(classification_report_path):
+            print(f"Adding image {classification_report_path} to PDF...")
+            pdf.add_image(classification_report_path, width=180, height=100)
+        else:
+            print(f"Error: Classification report image not found at {classification_report_path}")
 
         # Ensure the save directory exists
         if not os.path.exists(save_dir):

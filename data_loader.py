@@ -1,7 +1,10 @@
-
 import os
 import pandas as pd
 from joblib import Parallel, delayed
+import warnings
+
+# Suppress FutureWarning
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 class DataLoader:
     def __init__(self, responses_path, sensors_path, nodes):
