@@ -94,7 +94,7 @@ def main():
     visualization = Visualization()
 
     # Define class names, including 'None' for idle periods
-    class_names = ['Kripke', 'AMG', 'PENNANT', 'linpack', 'LAMMPS', 'Quicksilver', 'None']
+    class_names = ['Kripke', 'AMG', 'PENNANT', 'linpack', 'LAMMPS', 'Quicksilver']
 
     # ================================
     # Step 1: Data Loading and Merging
@@ -192,13 +192,20 @@ def main():
     start_time = time.time()
     print("\n=== Step 4: Selecting Core Set based on Random Forest Importance Scores ===")
 
-    compression_ratio = 0.1  # Adjust as needed
+    # Step 4: Selecting Core Set based on Random Forest Importance Scores
+    compression_ratio = 0.01  # Adjust as needed
 
-    core_set = preprocessor.select_core_set_by_rf(X_scaled, y, compression_ratio=compression_ratio)
+    # Pass the training data (data_train) corresponding to X_train_full
+    data_train = data.iloc[X_train_full_indices].reset_index(drop=True)
+
+    core_set = preprocessor.select_core_set_by_rf(
+        X_train_full, y_train_full, data_train, compression_ratio=compression_ratio)
 
     # Ensure indices align correctly
-    X_core = X_scaled[core_set.index.to_numpy()]
-    y_core = y.iloc[core_set.index]
+    X_core = X_train_full[core_set.index.to_numpy()]
+    y_core = y_train_full.iloc[core_set.index].reset_index(drop=True)
+
+
 
     core_set_size = X_core.nbytes / 1024  # in KB
     reduction_factor = X_scaled.shape[0] / X_core.shape[0]
@@ -216,7 +223,7 @@ def main():
 
     X_train_core, X_test_core, y_train_core, y_test_core = train_test_split(X_core, y_core, test_size=0.2, random_state=42)
 
-    rf_core = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
+    rf_core = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42)
     rf_core.fit(X_train_core, y_train_core)
 
     y_pred_core = rf_core.predict(X_test_core)
@@ -246,14 +253,15 @@ def main():
     # =============================================
     print("\n=== Step 6: Evaluating Core Set Model on Full Data ===")
 
-    # Predict using the full dataset with the core set model
-    y_pred_full_core = rf_core.predict(X_scaled)  # Use the full dataset (X_scaled) for prediction
-    accuracy_full_core = accuracy_score(y, y_pred_full_core)  # Compare with original full labels (y)
+    # Evaluate the core model on the same test set as the full model
+    y_pred_full_core = rf_core.predict(X_test_full)
+    accuracy_full_core = accuracy_score(y_test_full, y_pred_full_core)
 
-    conf_matrix_full_core = confusion_matrix(y, y_pred_full_core)
-    plot_confusion_matrix(conf_matrix_full_core, class_names, "Confusion Matrix - Core Set Model on Full Data", "confusion_matrix_full_core.png")
+    # Confusion Matrix
+    conf_matrix_full_core = confusion_matrix(y_test_full, y_pred_full_core)
+    plot_confusion_matrix(conf_matrix_full_core, class_names, "Confusion Matrix - Core Set Model on Test Data", "confusion_matrix_full_core.png")
 
-    print(f"Accuracy of core set model on full dataset: {accuracy_full_core:.4f}")
+    print(f"Accuracy of core set model on test data: {accuracy_full_core:.4f}")
 
     # =========================
     # Step 7: Summary of Results
