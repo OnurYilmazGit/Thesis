@@ -40,7 +40,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(4)] 
+    nodes = [f'node{i}' for i in range(8)] 
     print(f"Length of Nodes: {len(nodes)}")
     
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -127,13 +127,10 @@ def main():
     # Apply feature engineering separately
     preprocessor_train = DataPreprocessor(data_train, window_size=20)
     data_train_fe = preprocessor_train.feature_engineering()
-    print("Train Data after feature engineering:", data_train_fe.head())
-
     
     preprocessor_test = DataPreprocessor(data_test, window_size=20)
     data_test_fe = preprocessor_test.feature_engineering()
-    print("Test Data after feature engineering:", data_test_fe.head())
-
+    
     # Ensure that the feature columns are the same
     feature_columns_fe = [col for col in data_train_fe.columns if col not in ['Time', 'Node', 'Value']]
     data_test_fe = data_test_fe[feature_columns_fe + ['Value']]
@@ -154,35 +151,11 @@ def main():
     # Transform test data using the same scaler
     X_test_full_scaled = scaler.transform(X_test_full)
     
-    # Ensure there are no NaN values in y
-    if y_train_full.isnull().any():
-        print("NaN values found in y_train_full after processing. Dropping corresponding rows.")
-        # Drop rows where y is NaN in training data
-        train_data = pd.DataFrame(X_train_full_scaled, columns=feature_columns_fe)
-        train_data['Value'] = y_train_full.reset_index(drop=True)
-        train_data.dropna(subset=['Value'], inplace=True)
-        X_train_full_scaled = train_data[feature_columns_fe].values
-        y_train_full = train_data['Value'].values
-    else:
-        print("No NaN values in y_train_full.")
-    
-    if y_test_full.isnull().any():
-        print("NaN values found in y_test_full after processing. Dropping corresponding rows.")
-        # Drop rows where y is NaN in test data
-        test_data = pd.DataFrame(X_test_full_scaled, columns=feature_columns_fe)
-        test_data['Value'] = y_test_full.reset_index(drop=True)
-        test_data.dropna(subset=['Value'], inplace=True)
-        X_test_full_scaled = test_data[feature_columns_fe].values
-        y_test_full = test_data['Value'].values
-    else:
-        print("No NaN values in y_test_full.")
-    
     # Verify that all nodes are present after feature engineering
     feature_nodes_train = set([feature.split('.')[0] for feature in feature_columns_fe])
     print("Nodes represented in training features:", feature_nodes_train)
     
     feature_nodes_test = set([feature.split('.')[0] for feature in feature_columns_fe])
-    print("Nodes represented in test features:", feature_nodes_test)
     
     # Record execution time
     end_time = time.time()
@@ -196,7 +169,7 @@ def main():
     start_time = time.time()
 
     # Perform Lasso Feature Selection on training data
-    X_train_full_scaled_fs, selected_features = lasso_feature_selection(X_train_full_scaled, y_train_full, alpha=0.0005)
+    X_train_full_scaled_fs, selected_features = lasso_feature_selection(X_train_full_scaled, y_train_full, alpha=0.001)
     print(f"Selected {len(selected_features)} features using Lasso.")
 
     # Apply the same feature selection to test data
@@ -304,10 +277,10 @@ def main():
 
     # Cross-validation on full data
     print("\n=== Cross-Validation on Full Data ===")
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    cv_scores_full = cross_val_score(rf_full, X_train_full_scaled_fs, y_train_full, cv=skf, scoring='accuracy', n_jobs=-1)
-    print(f"Cross-validation scores on full data: {cv_scores_full}")
-    print(f"Mean accuracy on full data: {np.mean(cv_scores_full):.4f} +/- {np.std(cv_scores_full):.4f}")
+    #skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    #cv_scores_full = cross_val_score(rf_full, X_train_full_scaled_fs, y_train_full, cv=skf, scoring='accuracy', n_jobs=-1)
+    #print(f"Cross-validation scores on full data: {cv_scores_full}")
+    #print(f"Mean accuracy on full data: {np.mean(cv_scores_full):.4f} +/- {np.std(cv_scores_full):.4f}")
 
     # ==================================================
     # Step 6: Selecting Core Set based on Stratified Sampling
@@ -315,7 +288,7 @@ def main():
     start_time = time.time()
     print("\n=== Step 6: Selecting Core Set based on Stratified Sampling ===")
 
-    compression_ratio = 0.005  # Adjust as needed
+    compression_ratio = 0.01  # Adjust as needed
 
     # Select the core set from the training data only
     # Note: We need to pass the data corresponding to the selected features
@@ -361,10 +334,10 @@ def main():
     print(f"Random Forest trained and evaluated on core set in {execution_times['Random Forest (Core Set)']:.2f} seconds.")
 
     # Cross-validation on core data
-    print("\n=== Cross-Validation on Core Data ===")
-    cv_scores_core = cross_val_score(rf_core, X_core, y_core, cv=skf, scoring='accuracy', n_jobs=-1)
-    print(f"Cross-validation scores on core data: {cv_scores_core}")
-    print(f"Mean accuracy on core data: {np.mean(cv_scores_core):.4f} +/- {np.std(cv_scores_core):.4f}")
+    #print("\n=== Cross-Validation on Core Data ===")
+    #cv_scores_core = cross_val_score(rf_core, X_core, y_core, cv=skf, scoring='accuracy', n_jobs=-1)
+    #print(f"Cross-validation scores on core data: {cv_scores_core}")
+    #print(f"Mean accuracy on core data: {np.mean(cv_scores_core):.4f} +/- {np.std(cv_scores_core):.4f}")
 
     # =============================================
     # Step 8: Evaluating Core Set Model on Full Test Data
@@ -381,8 +354,8 @@ def main():
     print(f"Accuracy of Core Model on Full Test Data: {accuracy_full_core:.4f}")
 
     # Learning Curve Analysis for Core Model
-    print("\n=== Learning Curve Analysis for Core Data Model ===")
-    plot_learning_curve(rf_core, X_core, y_core, title="Learning Curve - Core Data", cv=5, n_jobs=-1)
+    #print("\n=== Learning Curve Analysis for Core Data Model ===")
+    #plot_learning_curve(rf_core, X_core, y_core, title="Learning Curve - Core Data", cv=5, n_jobs=-1)
 
     # =========================
     # Step 9: Statistical Comparison and Summary of Results
@@ -390,7 +363,7 @@ def main():
     print("\n=== Step 9: Statistical Comparison and Summary of Results ===")
 
     # Statistical comparison of cross-validation scores
-    statistical_comparison(cv_scores_full, cv_scores_core)
+    #statistical_comparison(cv_scores_full, cv_scores_core)
 
     # Calculate feature counts
     full_data_feature_count = X_train_full_scaled_fs.shape[1]
