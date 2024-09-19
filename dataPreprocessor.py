@@ -2,17 +2,16 @@
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+import logging
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.model_selection import StratifiedShuffleSplit
-import logging
-from joblib import Parallel, delayed
+from sklearn.feature_selection import RFE
+from sklearn.ensemble import RandomForestClassifier
 
 class DataPreprocessor:
     def __init__(self, data, window_size=10):
         self.data = data
         self.window_size = window_size
-        self.scaler = StandardScaler()
 
     def feature_engineering(self):
         """Create features such as lagged values and differences based on seconds."""
@@ -21,22 +20,19 @@ class DataPreprocessor:
         # Log the initial shape of the data
         print(f"Initial data shape: {self.data.shape}")
 
-        # Create time-based features focused on seconds
-        time_col = pd.to_datetime(self.data['Time'], unit='s')
-        self.data['second'] = time_col.dt.second
+        # Ensure data is sorted by 'Node' and 'Time'
+        self.data.sort_values(by=['Node', 'Time'], inplace=True)
+        self.data.reset_index(drop=True, inplace=True)
 
-        # Lag features to capture past values
-        for lag in range(1, 10):  # Create lag features for 1 to 10 seconds
-            self.data[f'lag_{lag}'] = self.data['Value'].shift(lag)
-
-        # Difference between consecutive values to capture changes
-        for lag in range(1, 10):  # Create diff features for 1 to 10 seconds
-            self.data[f'diff_{lag}'] = self.data['Value'].diff(lag)
-            
-        # Forward fill and backward fill
+        # Handle missing values
+        # Forward fill followed by backward fill (only if forward fill isn't sufficient)
         self.data.fillna(method='ffill', inplace=True)
         self.data.fillna(method='bfill', inplace=True)
 
+        #Check if still there is null values
+        if self.data.isnull().sum().sum() > 0:
+            raise ValueError("Missing values still exist after forward and backward fill.")
+            
         # Log and store data snapshot if needed
         if self.data.empty:
             self.data.to_csv("empty_data_snapshot.csv", index=False)
@@ -45,16 +41,7 @@ class DataPreprocessor:
         logging.info("Feature engineering completed")
         return self.data
 
-    def normalize_data(self, feature_columns):
-        """Scale the data using StandardScaler."""
-        logging.info("Normalizing data")
-        X = self.data[feature_columns].to_numpy(dtype=np.float32)
-        
-        # Scale the data
-        X_scaled = self.scaler.fit_transform(X)
-        return X_scaled
-
-    def select_features(self, X, y, k=50):
+    def select_features(self, X, y, k=300):
         """Select top k features based on ANOVA F-score."""
         logging.info(f"Selecting top {k} features")
         selector = SelectKBest(f_classif, k=k)
@@ -67,12 +54,12 @@ class DataPreprocessor:
         logging.info("Selecting core set using stratified sampling based on compression ratio.")
         
         # Compute the number of samples per class
-        class_counts = y.value_counts()
+        class_counts = pd.Series(y).value_counts()
         min_samples_per_class = 10  # Set a reasonable minimum
+        n_classes = len(class_counts)
         n_core_samples = int(len(X_scaled) * compression_ratio)
 
         # Adjust n_core_samples if necessary
-        n_classes = len(class_counts)
         if n_core_samples < n_classes * min_samples_per_class:
             n_core_samples = n_classes * min_samples_per_class
 
@@ -81,9 +68,24 @@ class DataPreprocessor:
         for core_indices, _ in sss.split(X_scaled, y):
             core_set = data.iloc[core_indices].copy()
             X_core = X_scaled[core_indices]
-            y_core = y.iloc[core_indices].reset_index(drop=True)
+            y_core = y[core_indices]
             break
 
         logging.info(f"Core set selected with {len(core_indices)} samples.")
 
         return core_set, X_core, y_core
+
+    def select_features_rfe(self, X, y, n_features_to_select=None, estimator=None, step=1):
+        logging.info("Selecting features using RFE")
+
+        if estimator is None:
+            estimator = RandomForestClassifier(n_jobs=-1, random_state=42)
+
+        selector = RFE(estimator, n_features_to_select=n_features_to_select, step=step)
+        selector.fit(X, y)
+        X_new = selector.transform(X)
+        selected_features = selector.get_support(indices=True)
+
+        logging.info(f"Selected {len(selected_features)} features using RFE.")
+
+        return X_new, selected_features
