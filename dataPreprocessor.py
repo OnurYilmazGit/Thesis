@@ -7,6 +7,7 @@ from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.feature_selection import RFE
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import VarianceThreshold
 
 class DataPreprocessor:
     def __init__(self, data, window_size=10):
@@ -23,6 +24,16 @@ class DataPreprocessor:
         # Ensure data is sorted by 'Node' and 'Time'
         self.data.sort_values(by=['Node', 'Time'], inplace=True)
         self.data.reset_index(drop=True, inplace=True)
+        
+        # Lag features to capture past values
+        for lag in range(1, 10):  # Create lag features for 1 to 10 seconds
+            self.data[f'lag_{lag}'] = self.data['Value'].shift(lag)
+            #print(f"After creating lag_{lag}, data shape: {self.data.shape}")
+
+        # Difference between consecutive values to capture changes
+        for lag in range(1, 10):  # Create diff features for 1 to 10 seconds
+            self.data[f'diff_{lag}'] = self.data['Value'].diff(lag)
+            #print(f"After creating diff_{lag}, data shape: {self.data.shape}")        
 
         # Handle missing values
         # Forward fill followed by backward fill (only if forward fill isn't sufficient)
@@ -89,3 +100,32 @@ class DataPreprocessor:
         logging.info(f"Selected {len(selected_features)} features using RFE.")
 
         return X_new, selected_features
+
+    def variance_threshold_feature_selection(X_train, X_test, threshold):
+        # Initialize the variance threshold selector
+        selector = VarianceThreshold(threshold=threshold)
+        
+        # Fit and transform the training data
+        X_train_selected = selector.fit_transform(X_train)
+        
+        # Apply the same transformation to the test data
+        X_test_selected = selector.transform(X_test)
+        
+        # Return only the selected features and the transformed data
+        return X_train_selected, X_test_selected
+
+
+    def export_feature_importances(rf_model, feature_columns, filename="feature_importances.csv"):
+        # Get feature importances from the model
+        importances = rf_model.feature_importances_
+        
+        # Create a DataFrame for feature importances
+        feature_importances = pd.DataFrame({
+            'Feature': feature_columns,
+            'Importance': importances
+        })
+        
+        # Sort by importance and save to CSV
+        feature_importances.sort_values(by='Importance', ascending=False, inplace=True)
+        feature_importances.to_csv(filename, index=False)
+        print(f"Feature importances exported to {filename}")
