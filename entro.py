@@ -1,142 +1,24 @@
-# main.py
-
 import pandas as pd
 import numpy as np
-import os
-import warnings
 import time
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, StratifiedShuffleSplit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, cohen_kappa_score, matthews_corrcoef
-from scipy.stats import ks_2samp
-from collections import defaultdict
 from sklearn.feature_selection import VarianceThreshold
+from scipy.special import entr
+from collections import defaultdict
+from sklearn.metrics import classification_report
+from scipy.special import entr
 
 # Import custom classes
 from data_loader import DataLoader
 from dataPreprocessor import DataPreprocessor
+import warnings
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-def evaluate_model(model, X_test, y_test, class_names, model_name, filename_prefix):
-    """
-    Evaluate the model and generate performance metrics and plots.
-
-    Args:
-        model: Trained model to evaluate.
-        X_test: Test feature matrix.
-        y_test: True labels for the test set.
-        class_names: List of class names for plotting.
-        model_name: Name of the model (for titles and print statements).
-        filename_prefix: Prefix for saved plot filenames.
-    Returns:
-        metrics_dict: Dictionary containing evaluation metrics.
-    """
-    print(f"\n=== Evaluating {model_name} ===")
-    y_pred = model.predict(X_test)
-
-    # Calculate metrics
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
-    recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
-    f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
-    kappa = cohen_kappa_score(y_test, y_pred)
-    mcc = matthews_corrcoef(y_test, y_pred)
-
-    # Confusion Matrix
-    conf_matrix = confusion_matrix(y_test, y_pred)
-    plt.figure(figsize=(10,7))
-    sns.heatmap(conf_matrix, annot=True, fmt='d', xticklabels=class_names, yticklabels=class_names, cmap='Blues')
-    plt.title(f"Confusion Matrix - {model_name}")
-    plt.xlabel("Predicted")
-    plt.ylabel("True")
-    plt.savefig(f"{filename_prefix}_confusion_matrix.png")
-    plt.close()
-
-    # Classification Report
-    print(f"\nClassification Report for {model_name}:")
-    print(classification_report(y_test, y_pred, target_names=class_names, zero_division=0))
-
-    # Compile metrics
-    metrics_dict = {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1,
-        'cohen_kappa': kappa,
-        'mcc': mcc
-    }
-
-    return metrics_dict
-
-def compare_class_distributions(y_full, y_core, class_names):
-    """
-    Compare class distributions between full training set and core set.
-
-    Args:
-        y_full: Labels from the full training set.
-        y_core: Labels from the core set.
-        class_names: List of class names.
-    """
-    plt.figure(figsize=(10,5))
-    sns.countplot(x=y_full, label='Full Training Set', color='blue', alpha=0.6)
-    sns.countplot(x=y_core, label='Core Set', color='red', alpha=0.6)
-    plt.title('Class Distribution: Full Training Set vs. Core Set')
-    plt.xlabel('Classes')
-    plt.ylabel('Count')
-    plt.legend()
-    plt.savefig("class_distribution_comparison.png")
-    plt.close()
-
-def compare_feature_distributions(X_full, X_core, feature_names):
-    """
-    Compare feature distributions between full training set and core set using KS test.
-
-    Args:
-        X_full: Feature matrix from the full training set.
-        X_core: Feature matrix from the core set.
-        feature_names: List of feature names.
-    """
-    p_values = {}
-    for i, feature in enumerate(feature_names):
-        statistic, p_value = ks_2samp(X_full[:, i], X_core[:, i])
-        p_values[feature] = p_value
-    # Features with p-value < 0.05
-    significant_features = [feature for feature, p in p_values.items() if p < 0.05]
-    print(f"Number of features with significantly different distributions: {len(significant_features)}")
-    print("Features with significantly different distributions (p < 0.05):")
-    print(significant_features)
-
-def plot_pca(X_full, X_core, labels=['Full Training', 'Core Set']):
-    """
-    Perform PCA and plot the first two principal components.
-
-    Args:
-        X_full: Feature matrix from the full training set.
-        X_core: Feature matrix from the core set.
-        labels: Labels for the datasets.
-    """
-    from sklearn.decomposition import PCA
-
-    X_combined = np.vstack((X_full, X_core))
-    y_combined = np.array([labels[0]] * X_full.shape[0] + [labels[1]] * X_core.shape[0])
-
-    pca = PCA(n_components=2, random_state=42)
-    X_pca = pca.fit_transform(X_combined)
-
-    plt.figure(figsize=(10,7))
-    sns.scatterplot(x=X_pca[:X_full.shape[0],0], y=X_pca[:X_full.shape[0],1], label=labels[0], alpha=0.3)
-    sns.scatterplot(x=X_pca[X_full.shape[0]:,0], y=X_pca[X_full.shape[0]:,1], label=labels[1], alpha=0.7)
-    plt.title('PCA Projection of Full Training Set and Core Set')
-    plt.xlabel('PCA Component 1')
-    plt.ylabel('PCA Component 2')
-    plt.legend()
-    plt.savefig("pca_projection.png")
-    plt.close()
 
 def main():
     # Initialize variables to store execution times
@@ -153,7 +35,7 @@ def main():
 
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(12)]
+    nodes = [f'node{i}' for i in range(16)]
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -302,16 +184,13 @@ def main():
     print("\n=== Optimized Entropy-Driven Sampling Strategy ===")
     start_time = time.time()
 
-    # Step 1: Train Random Forest on the full training data with variance thresholded features
-    rf_full = RandomForestClassifier(n_estimators=500, random_state=42, n_jobs=-1, class_weight='balanced_subsample', min_samples_leaf=3, criterion='entropy')
+    # Step 1: Train Random Forest on the full training data with variance thresholded features 
+    rf_full = RandomForestClassifier(n_estimators=150, max_depth=20, random_state=42, n_jobs=-1, class_weight='balanced_subsample', min_samples_leaf=4, criterion='entropy', bootstrap=True)
     print("Training Random Forest on variance-thresholded full training data...")
     rf_full.fit(X_train_full_var, y_train_full)
     print("Random Forest training completed.")
 
     # Step 2: Compute Predictive Uncertainties using Entropy
-    from scipy.stats import entropy
-    from scipy.special import entr
-
     # Get predicted class probabilities for training data
     probs = rf_full.predict_proba(X_train_full_var)
     print("Predicted class probabilities shape:", probs.shape)
@@ -320,13 +199,17 @@ def main():
     predictive_entropies = entr(probs).sum(axis=1)
     print("Predictive entropies shape:", predictive_entropies.shape)
 
-    # Step 3: Select High-Uncertainty Samples
-    uncertainty_percentile = 92  # Adjust as needed for desired compression
-    uncertainty_threshold = np.percentile(predictive_entropies, uncertainty_percentile)
-    #Impurity threshold (percentile 95%):
-    print(f"Uncertainty threshold (percentile {uncertainty_percentile}%): {uncertainty_threshold}")
-    high_uncertainty_indices = np.where(predictive_entropies >= uncertainty_threshold)[0]
-    print(f"Total high-uncertainty samples selected: {len(high_uncertainty_indices)}")
+    # Determine thresholds
+    high_uncertainty_threshold = np.percentile(predictive_entropies, 98)
+    low_uncertainty_threshold = np.percentile(predictive_entropies, 2)
+
+    # Select samples
+    high_uncertainty_indices = np.where(predictive_entropies >= high_uncertainty_threshold)[0]
+    low_uncertainty_indices = np.where(predictive_entropies <= low_uncertainty_threshold)[0]
+
+    # Combine indices
+    selected_indices = np.concatenate([high_uncertainty_indices, low_uncertainty_indices])
+
 
     # Step 4: Ensure Balanced Class Distribution
     # Calculate Class Proportions in Full Dataset
@@ -335,29 +218,21 @@ def main():
     print(class_distribution_full)
 
     # Ensure that the core set maintains the same class proportions
-    min_samples_per_class = 300  # Minimum samples for each class
+    min_samples_per_class = 200  # Minimum samples for each class
     balanced_indices = []
     class_sample_counts = defaultdict(int)
 
     # Calculate how many samples to include from each class
-    total_core_samples = len(high_uncertainty_indices)
+    total_core_samples = len(selected_indices)
     class_sample_limits = (class_distribution_full * total_core_samples).astype(int)
     class_sample_limits[class_sample_limits < min_samples_per_class] = min_samples_per_class
 
     print("\nClass sample limits for core set based on full dataset proportions:")
     print(class_sample_limits)
 
-    # Create the balanced core set
-    for idx in high_uncertainty_indices:
-        label = y_train_full.iloc[idx]
-        # Add the sample if class count is below the limit
-        if class_sample_counts[label] < class_sample_limits[label]:
-            balanced_indices.append(idx)
-            class_sample_counts[label] += 1
-
     # Step 5: Create the Core Dataset
-    X_core = X_train_full_var[balanced_indices]
-    y_core = y_train_full.iloc[balanced_indices].reset_index(drop=True)
+    X_core = X_train_full_var[selected_indices]
+    y_core = y_train_full.iloc[selected_indices].reset_index(drop=True)
 
     # Step 6: Print the Class Distribution in the Core Set
     class_distribution_core = y_core.value_counts(normalize=True)
@@ -387,7 +262,7 @@ def main():
     print("\n=== Step 6: Training Random Forest on Core Set Data ===")
 
     # Train Random Forest on the core set 
-    rf_core = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced_subsample', criterion='entropy', min_samples_leaf=2)
+    rf_core = RandomForestClassifier(n_estimators=200, n_jobs=-1, class_weight='balanced_subsample', max_depth=20, bootstrap=True)
     print("Training Random Forest on core set...")
     rf_core.fit(X_core, y_core)
 
