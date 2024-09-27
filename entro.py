@@ -153,7 +153,7 @@ def main():
 
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(16)]
+    nodes = [f'node{i}' for i in range(12)]
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -297,69 +297,80 @@ def main():
     print(f"Variance Threshold feature selection completed in {execution_times['Variance Threshold Feature Selection']:.2f} seconds.")
 
     # ================================
-    # Step 5: Entropy-Driven Sampling Strategy
+    # Optimized Entropy-Driven Sampling Strategy with Predictive Uncertainties
     # ================================
-    print("\n=== Step 5: Entropy-Driven Sampling Strategy ===")
+    print("\n=== Optimized Entropy-Driven Sampling Strategy ===")
     start_time = time.time()
 
-    # Train a Random Forest on the full training data with variance thresholded features
-    rf_full = RandomForestClassifier(n_estimators=400, random_state=42, n_jobs=-1, class_weight='balanced_subsample', min_samples_leaf=2)
+    # Step 1: Train Random Forest on the full training data with variance thresholded features
+    rf_full = RandomForestClassifier(n_estimators=500, random_state=42, n_jobs=-1, class_weight='balanced_subsample', min_samples_leaf=3, criterion='entropy')
     print("Training Random Forest on variance-thresholded full training data...")
     rf_full.fit(X_train_full_var, y_train_full)
+    print("Random Forest training completed.")
 
-    # Extract high-entropy samples using a percentile threshold
-    percentile = 97  # Adjust this value to increase compression ratio
-    high_entropy_indices = preprocessor_train.get_high_entropy_samples(
-        rf_full, X_train_full_var, y_train_full, percentile=percentile)
+    # Step 2: Compute Predictive Uncertainties using Entropy
+    from scipy.stats import entropy
+    from scipy.special import entr
 
-    # Create core set from high-entropy samples
-    # To address class imbalance, implement a balanced sampling strategy
-    # Step 1: Calculate Class Proportions in Full Dataset
-    class_distribution_full = y_train_full.value_counts(normalize=True)  # Get class proportions
+    # Get predicted class probabilities for training data
+    probs = rf_full.predict_proba(X_train_full_var)
+    print("Predicted class probabilities shape:", probs.shape)
+
+    # Compute entropy for each sample
+    predictive_entropies = entr(probs).sum(axis=1)
+    print("Predictive entropies shape:", predictive_entropies.shape)
+
+    # Step 3: Select High-Uncertainty Samples
+    uncertainty_percentile = 92  # Adjust as needed for desired compression
+    uncertainty_threshold = np.percentile(predictive_entropies, uncertainty_percentile)
+    #Impurity threshold (percentile 95%):
+    print(f"Uncertainty threshold (percentile {uncertainty_percentile}%): {uncertainty_threshold}")
+    high_uncertainty_indices = np.where(predictive_entropies >= uncertainty_threshold)[0]
+    print(f"Total high-uncertainty samples selected: {len(high_uncertainty_indices)}")
+
+    # Step 4: Ensure Balanced Class Distribution
+    # Calculate Class Proportions in Full Dataset
+    class_distribution_full = y_train_full.value_counts(normalize=True)
     print("\nClass distribution in full dataset (proportion):")
     print(class_distribution_full)
 
-    # Step 2: Apply Same Proportions to Core Set
-    min_samples_per_class = 400  # Ensure a minimum number of samples for each class
+    # Ensure that the core set maintains the same class proportions
+    min_samples_per_class = 300  # Minimum samples for each class
     balanced_indices = []
     class_sample_counts = defaultdict(int)
 
-    # Calculate the number of samples to include from each class in the core set
-    total_core_samples = len(high_entropy_indices)
+    # Calculate how many samples to include from each class
+    total_core_samples = len(high_uncertainty_indices)
     class_sample_limits = (class_distribution_full * total_core_samples).astype(int)
-    class_sample_limits[class_sample_limits < min_samples_per_class] = min_samples_per_class  # Ensure minimum samples
+    class_sample_limits[class_sample_limits < min_samples_per_class] = min_samples_per_class
 
     print("\nClass sample limits for core set based on full dataset proportions:")
     print(class_sample_limits)
 
-    for idx in high_entropy_indices:
+    # Create the balanced core set
+    for idx in high_uncertainty_indices:
         label = y_train_full.iloc[idx]
-        # If the number of samples for this class is still below the limit, add the sample
+        # Add the sample if class count is below the limit
         if class_sample_counts[label] < class_sample_limits[label]:
             balanced_indices.append(idx)
             class_sample_counts[label] += 1
 
-    # Step 3: Create the Core Dataset
+    # Step 5: Create the Core Dataset
     X_core = X_train_full_var[balanced_indices]
     y_core = y_train_full.iloc[balanced_indices].reset_index(drop=True)
 
-    # Step 4: Print the Class Distribution in the Core Set
+    # Step 6: Print the Class Distribution in the Core Set
     class_distribution_core = y_core.value_counts(normalize=True)
     print("\nClass distribution in core set (proportion):")
     print(class_distribution_core)
 
-    # Check if proportions match
-    if np.allclose(class_distribution_full.values, class_distribution_core.values, atol=0.01):
-        print("\nThe core set maintains the same class distribution as the full dataset.")
-    else:
-        print("\nThere is a slight mismatch in class distributions between the full dataset and the core set.")
-
+    # Step 7: Check Core Set Size and Compression Ratio
     core_set_size = X_core.nbytes / 1024  # in KB
     reduction_factor = len(X_train_full_var) / len(X_core)
 
     end_time = time.time()
-    execution_times['Entropy-Driven Sampling'] = end_time - start_time
-    print(f"Entropy-driven sampling completed in {execution_times['Entropy-Driven Sampling']:.2f} seconds.")
+    execution_times['Optimized Entropy-Driven Sampling'] = end_time - start_time
+    print(f"Optimized entropy-driven sampling completed in {execution_times['Optimized Entropy-Driven Sampling']:.2f} seconds.")
     print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
     print(f"Full set size: {X_train_full_var.nbytes / 1024:.2f} KB")
 
@@ -368,14 +379,15 @@ def main():
     class_counts = dict(zip(unique, counts))
     print("Class distribution in core set:", class_counts)
 
+
     # ============================
     # Step 6: Training Random Forest on Core Set Data
     # ============================
     start_time = time.time()
     print("\n=== Step 6: Training Random Forest on Core Set Data ===")
 
-    # Train Random Forest on the core set
-    rf_core = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1, class_weight='balanced_subsample')
+    # Train Random Forest on the core set 
+    rf_core = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced_subsample', criterion='entropy', min_samples_leaf=2)
     print("Training Random Forest on core set...")
     rf_core.fit(X_core, y_core)
 
