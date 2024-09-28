@@ -10,6 +10,7 @@ from scipy.special import entr
 from collections import defaultdict
 from sklearn.metrics import classification_report
 from scipy.special import entr
+from sklearn.cluster import MiniBatchKMeans
 
 # Import custom classes
 from data_loader import DataLoader
@@ -158,7 +159,7 @@ def main():
     start_time = time.time()
 
     # Initialize the variance threshold selector
-    variance_threshold = 0.25  # Adjust as needed
+    variance_threshold = 0.10  # Adjust as needed
     selector = VarianceThreshold(threshold=variance_threshold)
 
     # Fit and transform the training data
@@ -200,8 +201,8 @@ def main():
     print("Predictive entropies shape:", predictive_entropies.shape)
 
     # Determine thresholds
-    high_uncertainty_threshold = np.percentile(predictive_entropies, 98)
-    low_uncertainty_threshold = np.percentile(predictive_entropies, 2)
+    high_uncertainty_threshold = np.percentile(predictive_entropies, 96)
+    low_uncertainty_threshold = np.percentile(predictive_entropies, 3)
 
     # Select samples
     high_uncertainty_indices = np.where(predictive_entropies >= high_uncertainty_threshold)[0]
@@ -276,6 +277,75 @@ def main():
     execution_times['Training on Core Set'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
 
+        
+    # ============================
+    # Step 6.5: Further Compression Using K-Means Clustering
+    # ============================
+
+    print("\n=== Step 6.5: Further Compression Using K-Means Clustering ===")
+    start_time = time.time()
+
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import pairwise_distances_argmin_min
+
+    # Decide on the number of clusters to achieve the desired compression ratio
+    desired_compression_ratio = 50  # Adjust as needed
+    number_of_samples_in_core = X_core.shape[0]
+    number_of_clusters = max(1, int(number_of_samples_in_core / desired_compression_ratio))
+    print(f"Number of clusters for desired compression ratio: {number_of_clusters}")
+
+    # Apply K-Means clustering to X_core
+    print("Applying K-Means clustering to the core set...")
+    kmeans = MiniBatchKMeans(n_clusters=number_of_clusters, random_state=42, batch_size=500)
+    kmeans.fit(X_core)
+    # Find the sample closest to each cluster center
+    print("Selecting representative samples from each cluster...")
+    closest_indices, _ = pairwise_distances_argmin_min(kmeans.cluster_centers_, X_core)
+    X_core_kmeans = X_core[closest_indices]
+    y_core_kmeans = y_core.iloc[closest_indices].reset_index(drop=True)
+
+    # Verify the size of the compressed core set
+    print(f"Compressed core set size: {X_core_kmeans.shape[0]} samples")
+
+    # ============================
+    # Step 6.6: Training Random Forest on K-Means Compressed Core Set
+    # ============================
+
+    print("\n=== Step 6.6: Training Random Forest on K-Means Compressed Core Set ===")
+    start_time_rf = time.time()
+
+    rf_core_kmeans = RandomForestClassifier(
+        n_estimators=200,
+        n_jobs=-1,
+        class_weight='balanced_subsample',
+        max_depth=20,
+        bootstrap=True,
+        random_state=42
+    )
+    print("Training Random Forest on K-Means compressed core set...")
+    rf_core_kmeans.fit(X_core_kmeans, y_core_kmeans)
+ 
+    # Evaluate the model on the test data
+    y_pred_core_kmeans = rf_core_kmeans.predict(X_test_full_var)
+    print("\nClassification Report (K-Means Compressed Core Set Model on Test Data):")
+    print(classification_report(y_test_full, y_pred_core_kmeans, target_names=class_names, zero_division=0))
+
+    # Record execution time
+    end_time_rf = time.time()
+    execution_times['Training on K-Means Compressed Core Set'] = end_time_rf - start_time_rf
+    print(f"Random Forest trained and evaluated on K-Means compressed core set in {execution_times['Training on K-Means Compressed Core Set']:.2f} seconds.")
+
+    # Update compression ratio
+    reduction_factor_kmeans = len(X_train_full_var) / X_core_kmeans.shape[0]
+    print(f"Compression Ratio after K-Means: {reduction_factor_kmeans:.2f}")
+
+    # Record total execution time for this step
+    end_time = time.time()
+    execution_times['K-Means Compression'] = end_time - start_time
+    print(f"K-Means compression and model training completed in {execution_times['K-Means Compression']:.2f} seconds.")
+
+
+# ---- Surayi bir uopdate et ama obncesinde percentage lardan yuru, 
     # =========================
     # Step 7: Comparison of Models
     # =========================
@@ -300,14 +370,31 @@ def main():
     # Feature count and data size
     full_data_feature_count = X_train_full_var.shape[1]
     core_data_feature_count = X_core.shape[1]
+    kmeans_core_data_feature_count = X_core_kmeans.shape[1]
 
     summary_df = pd.DataFrame({
-        'Dataset': ['Full Data', 'Core Set'],
-        'Samples': [X_train_full_var.shape[0], X_core.shape[0]],
-        'Accuracy': [rf_full.score(X_test_full_var, y_test_full), rf_core.score(X_test_full_var, y_test_full)],
-        'Compression Ratio': [1, round(reduction_factor, 2)],
-        'Data Size (KB)': [X_train_full_var.nbytes / 1024, X_core.nbytes / 1024],
-        'Number of Features': [full_data_feature_count, core_data_feature_count]
+        'Dataset': ['Full Data', 'Core Set', 'KMean Core '],
+        'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_kmeans.shape[0]],
+        'Accuracy': [
+            rf_full.score(X_test_full_var, y_test_full),
+            rf_core.score(X_test_full_var, y_test_full),
+            rf_core_kmeans.score(X_test_full_var, y_test_full)
+        ],
+        'Compression Ratio': [
+            1,
+            round(reduction_factor, 2),
+            round(reduction_factor_kmeans, 2)
+        ],
+        'Data Size (KB)': [
+            X_train_full_var.nbytes / 1024,
+            X_core.nbytes / 1024,
+            X_core_kmeans.nbytes / 1024
+        ],
+        'Number of Features': [
+            full_data_feature_count,
+            core_data_feature_count,
+            kmeans_core_data_feature_count
+        ]
     })
 
     print("\n=== Summary Table ===")
