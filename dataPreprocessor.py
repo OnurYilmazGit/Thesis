@@ -8,6 +8,7 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.feature_selection import RFE
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.tree import _tree
 
 class DataPreprocessor:
     def __init__(self, data, window_size=10):
@@ -25,32 +26,28 @@ class DataPreprocessor:
         self.data.sort_values(by=['Node', 'Time'], inplace=True)
         self.data.reset_index(drop=True, inplace=True)
         
-        # Lag features to capture past values
-        for lag in range(1, 10):  # Create lag features for 1 to 10 seconds
-            self.data[f'lag_{lag}'] = self.data['Value'].shift(lag)
-            #print(f"After creating lag_{lag}, data shape: {self.data.shape}")
+        # Lag and diff features per 'Node'
+        for lag in range(1, 10):
+            self.data[f'lag_{lag}'] = self.data.groupby('Node')['Value'].shift(lag)
+            self.data[f'diff_{lag}'] = self.data.groupby('Node')['Value'].diff(lag)     
 
-        # Difference between consecutive values to capture changes
-        for lag in range(1, 10):  # Create diff features for 1 to 10 seconds
-            self.data[f'diff_{lag}'] = self.data['Value'].diff(lag)
-            #print(f"After creating diff_{lag}, data shape: {self.data.shape}")        
+        # Do not fill missing values to avoid data leakage
+        # Alternatively, handle missing values carefully
+        # For training data
+        if self.data['lag_1'].isnull().any():
+            self.data['lag_1'].fillna(method='bfill', inplace=True)
+        # For test data, do not use any values from training data
+        # Leave NaNs as is or fill with a constant value if appropriate
 
-        # Handle missing values
-        # Forward fill followed by backward fill (only if forward fill isn't sufficient)
-        self.data.fillna(method='ffill', inplace=True)
-        self.data.fillna(method='bfill', inplace=True)
-
-        #Check if still there is null values
-        if self.data.isnull().sum().sum() > 0:
-            raise ValueError("Missing values still exist after forward and backward fill.")
-            
-        # Log and store data snapshot if needed
         if self.data.empty:
             self.data.to_csv("empty_data_snapshot.csv", index=False)
             raise ValueError("Data is empty after feature engineering. Check data processing steps.")
 
+        self.data.to_csv("empty_data_snapshot2.csv", index=False)
+
         logging.info("Feature engineering completed")
         return self.data
+
 
     def select_features(self, X, y, k=300):
         """Select top k features based on ANOVA F-score."""
@@ -85,6 +82,7 @@ class DataPreprocessor:
         logging.info(f"Core set selected with {len(core_indices)} samples.")
 
         return core_set, X_core, y_core
+        
 
     def select_features_rfe(self, X, y, n_features_to_select=None, estimator=None, step=1):
         logging.info("Selecting features using RFE")
@@ -129,3 +127,56 @@ class DataPreprocessor:
         feature_importances.sort_values(by='Importance', ascending=False, inplace=True)
         feature_importances.to_csv(filename, index=False)
         print(f"Feature importances exported to {filename}")
+
+
+    def get_high_entropy_samples(self, rf_model, X_train, y_train, percentile=95):
+        """Extract samples that reach high-entropy leaf nodes in the Random Forest."""
+        print("Extracting high-entropy samples from Random Forest")
+
+        # Collect impurities from leaf nodes across all trees
+        leaf_impurities = []
+
+        for tree in rf_model.estimators_:
+            tree_struct = tree.tree_
+            # Get leaf node indices
+            leaf_indices = np.where(tree_struct.children_left == _tree.TREE_LEAF)[0]
+            # Get impurities (entropy) of leaf nodes
+            leaf_impurities.extend(tree_struct.impurity[leaf_indices])
+
+        # Determine impurity threshold based on the desired percentile
+        impurity_threshold = np.percentile(leaf_impurities, percentile)
+        print(f"Impurity threshold (percentile {percentile}%): {impurity_threshold}")
+
+        # Initialize set to hold indices of high-entropy samples
+        high_entropy_indices = set()
+
+        for tree_idx, tree in enumerate(rf_model.estimators_):
+            tree_struct = tree.tree_
+            # Get leaf node indices
+            leaf_indices = np.where(tree_struct.children_left == _tree.TREE_LEAF)[0]
+            # Get impurities (entropy) of leaf nodes
+            leaf_impurities = tree_struct.impurity[leaf_indices]
+
+            # Select high-entropy leaf nodes
+            high_entropy_leaf_nodes = leaf_indices[leaf_impurities >= impurity_threshold]
+            if len(high_entropy_leaf_nodes) == 0:
+                continue
+
+            # Use the decision path to find samples that reach high-entropy leaf nodes
+            decision_paths = tree.decision_path(X_train)
+            for node_id in high_entropy_leaf_nodes:
+                # Get samples that reach this node
+                sample_indices = np.where(decision_paths[:, node_id].toarray().ravel() == 1)[0]
+                high_entropy_indices.update(sample_indices)
+
+        print(f"Total high-entropy samples selected: {len(high_entropy_indices)}")
+        return list(high_entropy_indices)
+    
+
+    def calculate_sample_entropy(rf_model, X):
+        """Calculate entropy for each sample based on predicted probabilities."""
+        # Get predicted class probabilities
+        probs = rf_model.predict_proba(X)
+        # Calculate entropy
+        entropy = -np.sum(probs * np.log(probs + 1e-9), axis=1)  # Add small value to avoid log(0)
+        return entropy
