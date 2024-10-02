@@ -31,7 +31,7 @@ def main():
 
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(4)]
+    nodes = [f'node{i}' for i in range(12)]
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -127,7 +127,7 @@ def main():
     start_time = time.time()
 
     # Initialize the variance threshold selector
-    variance_threshold = 0.001  # Adjust as needed
+    variance_threshold = 0.1  # Adjust as needed
     selector = VarianceThreshold(threshold=variance_threshold)
 
     # Fit and transform the training data
@@ -178,8 +178,8 @@ def main():
     print("Predictive entropies shape:", predictive_entropies.shape)
 
     # Determine thresholds
-    high_uncertainty_threshold = np.percentile(predictive_entropies, 96)
-    low_uncertainty_threshold = np.percentile(predictive_entropies, 3)
+    high_uncertainty_threshold = np.percentile(predictive_entropies, 99)
+    low_uncertainty_threshold = np.percentile(predictive_entropies, 1)
 
     # Select samples
     high_uncertainty_indices = np.where(predictive_entropies >= high_uncertainty_threshold)[0]
@@ -196,8 +196,6 @@ def main():
 
     # Ensure that the core set maintains the same class proportions
     min_samples_per_class = 200  # Minimum samples for each class
-    balanced_indices = []
-    class_sample_counts = defaultdict(int)
 
     # Calculate how many samples to include from each class
     total_core_samples = len(selected_indices)
@@ -417,13 +415,13 @@ def main():
     )
 
     # Perform benchmarking
-    benchmark.check_data_leakage()
-    benchmark.clustering_evaluation()
-    benchmark.compare_model_performance(rf_full, rf_core, rf_core_kmeans)
-    benchmark.statistical_similarity_tests()
-    benchmark.feature_importance_comparison(rf_full, rf_core)
+    #benchmark.check_data_leakage()
+    #benchmark.clustering_evaluation()
+    #benchmark.compare_model_performance(rf_full, rf_core, rf_core_kmeans)
+    #benchmark.statistical_similarity_tests()
+    #benchmark.feature_importance_comparison(rf_full, rf_core)
     #benchmark.visualize_feature_distributions()
-    benchmark.cross_validation_checks(rf_core)
+    #benchmark.cross_validation_checks(rf_core)
     
 
 
