@@ -10,6 +10,27 @@ from collections import defaultdict
 from sklearn.metrics import classification_report
 from benchmarking2 import Benchmarking
 from data_loader import DataLoader
+from scipy.stats import ks_2samp, chi2_contingency
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+# Import necessary libraries for validation
+# Import necessary libraries for validation
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+
+# Import necessary libraries for models
+from sklearn.neighbors import KNeighborsClassifier
+from lightgbm import LGBMClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -153,14 +174,15 @@ def main():
 
     # Step 1: Train Random Forest on the full training data with variance-thresholded features
     rf_full = RandomForestClassifier(
-        n_estimators=200,
+        n_estimators=250,
         max_depth=20,
         random_state=42,
         n_jobs=-1,
+        min_samples_split=10,
         class_weight='balanced_subsample',
         min_samples_leaf=5,
         criterion='entropy',
-        bootstrap=True
+        bootstrap=True,
     )
     print("Training Random Forest on variance-thresholded full training data...")
     rf_full.fit(X_train_full_var, y_train_full)
@@ -228,10 +250,9 @@ def main():
 
     # Train Random Forest on the core set
     rf_core = RandomForestClassifier(
-        n_estimators=200,
+        n_estimators=150,
         n_jobs=-1,
         class_weight='balanced_subsample',
-        max_depth=20,
         bootstrap=True
     )
     print("Training Random Forest on core set...")
@@ -252,6 +273,10 @@ def main():
     execution_times['Training on Core Set'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
 
+    # Calculate compression ratio using data sizes
+    compression_ratio_size = X_train_full_var.nbytes / X_core.nbytes
+    print(f"Compression Ratio before stratified sampling: {compression_ratio_size:.2f}") 
+
     # ============================
     # Step 6.5: Further Compression Using Stratified Sampling
     # ============================
@@ -262,7 +287,7 @@ def main():
     from sklearn.model_selection import train_test_split
 
     # Decide on the sampling fraction to achieve the desired compression ratio
-    desired_compression_ratio = 50  # Adjust as needed
+    desired_compression_ratio = 20  # Adjust as needed
     sampling_fraction = 1 / desired_compression_ratio  # e.g., 1/50 = 0.02
 
     print(f"Sampling fraction for desired compression ratio: {sampling_fraction:.4f}")
@@ -282,15 +307,17 @@ def main():
     print("Class counts in compressed core set:")
     print(y_core_sampled.value_counts())
 
-    # Update compression ratio
-    reduction_factor_sampled = len(X_train_full_var) / X_core_sampled.shape[0]
-    print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
-
     # Record total execution time for this step
     end_time = time.time()
     execution_times['Stratified Sampling Compression'] = end_time - start_time
     print(f"Stratified sampling compression completed in {execution_times['Stratified Sampling Compression']:.2f} seconds.")
 
+
+    # Calculate compression ratio using data sizes
+    compression_ratio_size = X_train_full_var.nbytes / X_core_sampled.nbytes
+    print(f"Compression Ratio after stratified sampling: {compression_ratio_size:.2f}") 
+
+    
     # ============================
     # Step 6.6: Training Random Forest on Stratified Compressed Core Set
     # ============================
@@ -299,10 +326,9 @@ def main():
     start_time_rf = time.time()
 
     rf_core_sampled = RandomForestClassifier(
-        n_estimators=200,
+        n_estimators=100,
         n_jobs=-1,
         class_weight='balanced_subsample',
-        max_depth=20,
         bootstrap=True,
         random_state=42
     )
@@ -329,6 +355,8 @@ def main():
     # =========================
     print("\n=== Step 7: Comparison of Models ===")
 
+    reduction_factor_sampled = len(X_train_full_var) / len(X_core_sampled)
+
     # Evaluate the original model on the test data with variance-thresholded features
     y_pred_full = rf_full.predict(X_test_full_var)
 
@@ -346,6 +374,14 @@ def main():
     print(f"Compressed Core Model Test Accuracy: {rf_core_sampled.score(X_test_full_var, y_test_full):.4f}")
     print(f"Compression Ratio: {reduction_factor:.2f}")
     print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
+
+    # Get core set labels per 'Time' and export it time and labels 
+    core_labels = data_final.iloc[selected_indices]
+
+    # Get original dataset labels per 'Time' and export it time and labels
+    original_labels = data_final
+
+
 
     # =========================
     # Step 8: Statistical Comparison and Summary
@@ -398,14 +434,121 @@ def main():
         class_names=class_names
     )
 
-    # Perform benchmarking
-    #benchmark.check_data_leakage()
-    #benchmark.clustering_evaluation()
-    #benchmark.compare_model_performance(rf_full, rf_core, rf_core_sampled)
-    #benchmark.statistical_similarity_tests()
-    #benchmark.feature_importance_comparison(rf_full, rf_core)
-    #benchmark.visualize_feature_distributions()
+
+    # =========================
+    # Step 9: Statistical Validation of Compression
+    # =========================
+    print("\n=== Step 9: Statistical Validation of Compression ===")
+    start_time = time.time()
+
+    # 1. Compare feature distributions using Kolmogorov-Smirnov test
+    print("\nPerforming Kolmogorov-Smirnov tests on feature distributions...")
+    ks_results = []
+    for i in range(X_train_full_var.shape[1]):
+        stat, p_value = ks_2samp(X_train_full_var[:, i], X_core_sampled[:, i])
+        ks_results.append(p_value)
+    ks_pvalues = np.array(ks_results)
+
+    # Calculate the percentage of features that have similar distributions
+    alpha = 0.05  # Significance level
+    num_features = X_train_full_var.shape[1]
+    num_similar = np.sum(ks_pvalues > alpha)
+    print(f"Number of features with similar distributions: {num_similar}/{num_features}")
+    print(f"Percentage: {num_similar / num_features * 100:.2f}%")
+
+    # 3. Compare class distributions using Chi-Square test
+    print("\nComparing class distributions using Chi-Square test...")
+    full_class_counts = y_train_full.value_counts().sort_index()
+    compressed_class_counts = y_core_sampled.value_counts().sort_index()
+    contingency_table = pd.DataFrame({
+        'Full Data': full_class_counts,
+        'Compressed Data': compressed_class_counts
+    })
+    chi2, p_value, dof, expected = chi2_contingency(contingency_table)
+    print(f"Chi-Square Statistic: {chi2:.2f}, p-value: {p_value:.4f}")
+    if p_value > alpha:
+        print("Class distributions are similar.")
+    else:
+        print("Class distributions are significantly different.")
+  
+    # =========================
+    # Step 11: Detailed Feature Similarity Logging
+    # =========================
+    print("\n=== Step 11: Detailed Feature Similarity Logging ===")
+    start_time = time.time()
+
+    # 1. Get Feature Importances from the Full Model
+    print("\nCalculating feature importances from the full model...")
+    feature_importances = rf_full.feature_importances_
+
+    # Create a DataFrame for feature importances
+    feature_importance_df = pd.DataFrame({
+        'Feature': selected_variance_feature_names,
+        'Importance': feature_importances
+    })
+
+    # Sort features by importance
+    feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+
+    # Select top N important features
+    top_n = 50  # You can adjust this number
+    top_features = feature_importance_df.head(top_n)['Feature'].tolist()
+    top_feature_indices = [selected_variance_feature_names.index(f) for f in top_features]
+
+    # 2. Log Similarity Measures for Top Features
+    similarity_logs = []
+    print(f"\nLogging similarity measures for top {top_n} important features...")
+    for idx in top_feature_indices:
+        feature_name = selected_variance_feature_names[idx]
+        # Kolmogorov-Smirnov Test
+        stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], X_core_sampled[:, idx])
+        # Jensen-Shannon Divergence
+        hist_full, bin_edges = np.histogram(X_train_full_var[:, idx], bins=50, density=True)
+        hist_core, _ = np.histogram(X_core_sampled[:, idx], bins=bin_edges, density=True)
+        # Add a small value to avoid zeros
+        hist_full += 1e-8
+        hist_core += 1e-8
+        js_distance = jensenshannon(hist_full, hist_core)
+        # Wasserstein Distance
+        wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], X_core_sampled[:, idx])
+        # Append to logs
+        similarity_logs.append({
+            'Feature': feature_name,
+            'KS Statistic': stat_ks,
+            'KS p-value': p_value_ks,
+            'Jensen-Shannon Distance': js_distance,
+            'Wasserstein Distance': wasserstein_dist
+        })
+
+    # Convert logs to DataFrame
+    similarity_logs_df = pd.DataFrame(similarity_logs)
+
+    # Save logs to a CSV file
+    similarity_logs_df.to_csv('feature_similarity_logs.csv', index=False)
+    print("\nFeature similarity logs saved to 'feature_similarity_logs.csv'.")
+
+    # 3. Display the logs
+    print("\nTop Features Similarity Measures:")
+    print(similarity_logs_df.head(10))  # Display top 10 for brevity
+
+    # 4. Visualize Distributions of Top Features
+    print("\nVisualizing distributions of top important features...")
+    for idx in top_feature_indices[:5]:  # Visualize top 5 features
+        feature_name = selected_variance_feature_names[idx]
+        plt.figure(figsize=(8, 4))
+        sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
+        sns.kdeplot(X_core_sampled[:, idx], label='Compressed Data', shade=True)
+        plt.title(f'Distribution Comparison for Feature: {feature_name}')
+        plt.legend()
+        plt.show()
+
+    # Record execution time
+    end_time = time.time()
+    execution_times['Feature Similarity Logging'] = end_time - start_time
+    print(f"Feature similarity logging completed in {execution_times['Feature Similarity Logging']:.2f} seconds.")
     #benchmark.cross_validation_checks(rf_core)
+
+
 
 if __name__ == '__main__':
     main()
