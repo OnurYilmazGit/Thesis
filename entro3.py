@@ -1,37 +1,26 @@
-import pandas as pd
-import numpy as np
+import os
 import time
+import pickle
 import warnings
-from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
-from scipy.special import entr
-from collections import defaultdict
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
-from benchmarking2 import Benchmarking
-from data_loader import DataLoader
-from scipy.stats import ks_2samp, chi2_contingency
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.decomposition import PCA
-# Import necessary libraries for validation
-# Import necessary libraries for validation
-from scipy.spatial.distance import jensenshannon
+from sklearn.model_selection import train_test_split
+from scipy.special import entr
 from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
-
-
-# Import necessary libraries for models
-from sklearn.neighbors import KNeighborsClassifier
+from scipy.spatial.distance import jensenshannon
+from data_loader import DataLoader
+from benchmarking2 import Benchmarking
+from sklearn.neighbors import KNeighborsClassifier  
 from lightgbm import LGBMClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import GaussianNB
-from sklearn.ensemble import RandomForestClassifier
-
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
@@ -178,11 +167,10 @@ def main():
         max_depth=20,
         random_state=42,
         n_jobs=-1,
-        min_samples_split=10,
         class_weight='balanced_subsample',
         min_samples_leaf=5,
         criterion='entropy',
-        bootstrap=True,
+        bootstrap=True
     )
     print("Training Random Forest on variance-thresholded full training data...")
     rf_full.fit(X_train_full_var, y_train_full)
@@ -273,10 +261,6 @@ def main():
     execution_times['Training on Core Set'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
 
-    # Calculate compression ratio using data sizes
-    compression_ratio_size = X_train_full_var.nbytes / X_core.nbytes
-    print(f"Compression Ratio before stratified sampling: {compression_ratio_size:.2f}") 
-
     # ============================
     # Step 6.5: Further Compression Using Stratified Sampling
     # ============================
@@ -287,7 +271,7 @@ def main():
     from sklearn.model_selection import train_test_split
 
     # Decide on the sampling fraction to achieve the desired compression ratio
-    desired_compression_ratio = 20  # Adjust as needed
+    desired_compression_ratio = 50  # Adjust as needed
     sampling_fraction = 1 / desired_compression_ratio  # e.g., 1/50 = 0.02
 
     print(f"Sampling fraction for desired compression ratio: {sampling_fraction:.4f}")
@@ -307,17 +291,15 @@ def main():
     print("Class counts in compressed core set:")
     print(y_core_sampled.value_counts())
 
+    # Update compression ratio
+    reduction_factor_sampled = len(X_train_full_var) / X_core_sampled.shape[0]
+    print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
+
     # Record total execution time for this step
     end_time = time.time()
     execution_times['Stratified Sampling Compression'] = end_time - start_time
     print(f"Stratified sampling compression completed in {execution_times['Stratified Sampling Compression']:.2f} seconds.")
 
-
-    # Calculate compression ratio using data sizes
-    compression_ratio_size = X_train_full_var.nbytes / X_core_sampled.nbytes
-    print(f"Compression Ratio after stratified sampling: {compression_ratio_size:.2f}") 
-
-    
     # ============================
     # Step 6.6: Training Random Forest on Stratified Compressed Core Set
     # ============================
@@ -355,8 +337,6 @@ def main():
     # =========================
     print("\n=== Step 7: Comparison of Models ===")
 
-    reduction_factor_sampled = len(X_train_full_var) / len(X_core_sampled)
-
     # Evaluate the original model on the test data with variance-thresholded features
     y_pred_full = rf_full.predict(X_test_full_var)
 
@@ -374,14 +354,6 @@ def main():
     print(f"Compressed Core Model Test Accuracy: {rf_core_sampled.score(X_test_full_var, y_test_full):.4f}")
     print(f"Compression Ratio: {reduction_factor:.2f}")
     print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
-
-    # Get core set labels per 'Time' and export it time and labels 
-    core_labels = data_final.iloc[selected_indices]
-
-    # Get original dataset labels per 'Time' and export it time and labels
-    original_labels = data_final
-
-
 
     # =========================
     # Step 8: Statistical Comparison and Summary
@@ -456,6 +428,17 @@ def main():
     print(f"Number of features with similar distributions: {num_similar}/{num_features}")
     print(f"Percentage: {num_similar / num_features * 100:.2f}%")
 
+    # 2. Visualize feature distributions for selected features
+    print("\nVisualizing feature distributions for selected features...")
+    feature_indices = np.random.choice(range(num_features), size=5, replace=False)
+    for idx in feature_indices:
+        plt.figure(figsize=(8, 4))
+        sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
+        sns.kdeplot(X_core_sampled[:, idx], label='Compressed Data', shade=True)
+        plt.title(f'Distribution Comparison for Feature {selected_variance_feature_names[idx]}')
+        plt.legend()
+        plt.show()
+
     # 3. Compare class distributions using Chi-Square test
     print("\nComparing class distributions using Chi-Square test...")
     full_class_counts = y_train_full.value_counts().sort_index()
@@ -470,7 +453,25 @@ def main():
         print("Class distributions are similar.")
     else:
         print("Class distributions are significantly different.")
-  
+
+    # 4. Visualize data using PCA
+    print("\nVisualizing data using PCA...")
+    pca = PCA(n_components=2, random_state=42)
+    X_full_pca = pca.fit_transform(X_train_full_var)
+    X_compressed_pca = pca.transform(X_core_sampled)
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(X_full_pca[:, 0], X_full_pca[:, 1], c=y_train_full, cmap='viridis', alpha=0.1, label='Full Data')
+    plt.scatter(X_compressed_pca[:, 0], X_compressed_pca[:, 1], c=y_core_sampled, cmap='viridis', edgecolor='k', label='Compressed Data')
+    plt.title('PCA Visualization of Full Data vs. Compressed Data')
+    plt.legend()
+    plt.show()
+
+    # Record execution time
+    end_time = time.time()
+    execution_times['Statistical Validation'] = end_time - start_time
+    print(f"Statistical validation completed in {execution_times['Statistical Validation']:.2f} seconds.")
+    
     # =========================
     # Step 11: Detailed Feature Similarity Logging
     # =========================
