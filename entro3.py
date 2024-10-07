@@ -170,7 +170,7 @@ def main():
         class_weight='balanced_subsample',
         min_samples_leaf=5,
         criterion='entropy',
-        bootstrap=True
+        bootstrap=True,
     )
     print("Training Random Forest on variance-thresholded full training data...")
     rf_full.fit(X_train_full_var, y_train_full)
