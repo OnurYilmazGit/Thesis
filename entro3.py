@@ -240,6 +240,8 @@ def main():
     rf_core = RandomForestClassifier(
         n_estimators=150,
         n_jobs=-1,
+        max_depth=20,
+        random_state=42,
         class_weight='balanced_subsample',
         bootstrap=True
     )
