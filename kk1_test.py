@@ -9,23 +9,70 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, precision_recall_curve
 from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
 from scipy.special import entr
-from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance
+from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance, ttest_rel
 from scipy.spatial.distance import jensenshannon
 from data_loader import DataLoader
 from benchmarking2 import Benchmarking
-from sklearn.neighbors import KNeighborsClassifier  
-from lightgbm import LGBMClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import make_scorer, accuracy_score, f1_score
+import gc
+import sys
+import os
+from datetime import datetime
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.cluster import MiniBatchKMeans
+
+gc.enable()
+
+import sys
+import os
+
+class TeeOutput:
+    def __init__(self, node_count):
+        # Create the folder based on node count
+        folder_name = f"node_count_{node_count}"
+        if not os.path.exists(folder_name):
+            os.makedirs(folder_name)
+        
+        # Generate a timestamp-based filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"time_trained_{timestamp}.txt"
+        
+        # Define the full file path
+        self.file_path = os.path.join(folder_name, filename)
+        
+        # Open the file in write mode
+        self.file = open(self.file_path, 'w')
+        
+        # Save the original stdout so you can restore it later
+        self.terminal = sys.stdout
+
+    def write(self, message):
+        # Write both to the terminal and the file
+        self.terminal.write(message)
+        self.file.write(message)
+
+    def flush(self):
+        # Flush both terminal and file
+        self.terminal.flush()
+        self.file.flush()
+
+    def close(self):
+        # Close the file when done
+        self.file.close()
+
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-import gc
-gc.enable()
 
 def cache_step(step_name, params, output_data=None, load_only=False):
     """
@@ -267,6 +314,7 @@ def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_
 
     return X_train_full_var, X_test_full_var, selected_variance_feature_names
 
+
 def main():
     # Initialize variables to store execution times
     execution_times = {}
@@ -277,8 +325,19 @@ def main():
     # Parameters for steps
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(4)]
+    nodes = [f'node{i}' for i in range(16)]  # Use all nodes for a comprehensive analysis
 
+    # Get the node count from the length of the nodes list
+    node_count = len(nodes)
+
+    # Add the dynamic output capture
+    tee = TeeOutput(node_count)
+    sys.stdout = tee  # Redirect all output
+
+
+    # Your original code starts here
+    print(f"Running process for node count: {node_count}")
+    
     # ================================
     # Step 1: Data Loading and Merging
     # ================================
@@ -303,6 +362,9 @@ def main():
         X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1
     )
 
+    # Free up memory
+    del X_train_full_scaled, X_test_full_scaled
+    gc.collect()
 
     # ================================
     # Optimized Entropy-Driven Sampling Strategy with Predictive Uncertainties
@@ -380,131 +442,164 @@ def main():
     print("Class distribution in core set:", class_counts)
 
     # ============================
-    # Step 6: Training Random Forest on Core Set Data
+    # Step 6: Training Models on Core Set Data
     # ============================
     start_time = time.time()
-    print("\n=== Step 6: Training Random Forest on Core Set Data ===")
+    print("\n=== Step 6: Training Models on Core Set Data ===")
 
-    # Train Random Forest on the core set
-    rf_core = RandomForestClassifier(
-        n_estimators=150,
-        n_jobs=-1,
-        max_depth=20,
-        random_state=42,
-        class_weight='balanced_subsample',
-        bootstrap=True
-    )
-    print("Training Random Forest on core set...")
-    rf_core.fit(X_core, y_core)
+    # Initialize models
+    models = {
+        'Random Forest': RandomForestClassifier(
+            n_estimators=150,
+            n_jobs=-1,
+            max_depth=20,
+            random_state=42,
+            class_weight='balanced_subsample',
+            bootstrap=True
+        )
+    }
 
-    # Evaluate the core model on the test data with variance-thresholded features
-    y_pred_core = rf_core.predict(X_test_full_var)
+    model_performance = {}
 
-    # Adjust target_names based on actual labels present in y_test_full
-    labels = np.unique(y_test_full)
-    target_names_adjusted = [class_names[int(i)] for i in labels]
+    for model_name, model in models.items():
+        print(f"\nTraining {model_name} on core set...")
+        model.fit(X_core, y_core)
+        y_pred = model.predict(X_test_full_var)
+        accuracy = accuracy_score(y_test_full, y_pred)
+        f1 = f1_score(y_test_full, y_pred, average='weighted')
+        model_performance[model_name] = {
+            'Model': model,
+            'Accuracy': accuracy,
+            'F1-Score': f1,
+            'Predictions': y_pred
+        }
+        print(f"{model_name} Accuracy: {accuracy:.4f}, F1-Score: {f1:.4f}")
+        # Classification Report
+        print(f"\nClassification Report ({model_name} on Test Data):")
+        print(classification_report(y_test_full, y_pred, target_names=class_names, zero_division=0))
 
-    print("\nClassification Report (Core Set Model on Test Data):")
-    print(classification_report(y_test_full, y_pred_core, labels=labels, target_names=target_names_adjusted, zero_division=0))
+        # Confusion Matrix
+        cm = confusion_matrix(y_test_full, y_pred)
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names, yticklabels=class_names)
+        plt.title(f'Confusion Matrix - {model_name}')
+        plt.ylabel('Actual')
+        plt.xlabel('Predicted')
+        plt.show()
 
     # Record execution time
     end_time = time.time()
     execution_times['Training on Core Set'] = end_time - start_time
-    print(f"Random Forest trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
+    print(f"Models trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
+
+    # Select the Random Forest model trained on the core set for further steps
+    rf_core = model_performance['Random Forest']['Model']
+    y_pred_core = model_performance['Random Forest']['Predictions']
 
     # ============================
-    # Step 6.5: Further Compression Using Stratified Sampling
+    # Step 6.5: Further Compression Using K-Means Sampling
     # ============================
 
-    print("\n=== Step 6.5: Further Compression Using Stratified Sampling ===")
+    print("\n=== Step 6.5: Further Compression Using K-Means Sampling ===")
     start_time = time.time()
 
-    from sklearn.model_selection import train_test_split
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import pairwise_distances_argmin_min
 
-    # Decide on the sampling fraction to achieve the desired compression ratio
+    # Decide on the number of clusters to achieve the desired compression ratio
     desired_compression_ratio = 50  # Adjust as needed
-    sampling_fraction = 1 / desired_compression_ratio  # e.g., 1/50 = 0.02
+    n_clusters = max(1, len(X_core) // desired_compression_ratio)  # Ensure at least one cluster
 
-    print(f"Sampling fraction for desired compression ratio: {sampling_fraction:.4f}")
+    print(f"Number of clusters for desired compression ratio: {n_clusters}")
 
-    # Perform stratified sampling on the core set
-    X_core_sampled, _, y_core_sampled, _ = train_test_split(
-        X_core, y_core, 
-        train_size=sampling_fraction, 
-        stratify=y_core, 
-        random_state=42
-    )
+    # Perform K-Means clustering on the core set
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=1024, random_state=42)
+    kmeans.fit(X_core)
+
+    # Get cluster centers
+    cluster_centers = kmeans.cluster_centers_
+
+    # For each cluster, find the closest data point to the cluster center
+    closest_data_points_indices, _ = pairwise_distances_argmin_min(cluster_centers, X_core)
+    X_core_compressed = X_core[closest_data_points_indices]
+    y_core_compressed = y_core.iloc[closest_data_points_indices].reset_index(drop=True)
 
     # Verify the size of the compressed core set
-    print(f"Compressed core set size: {X_core_sampled.shape[0]} samples")
+    print(f"Compressed core set size: {X_core_compressed.shape[0]} samples")
 
     # Check class distribution in compressed core set
     print("Class counts in compressed core set:")
-    print(y_core_sampled.value_counts())
+    print(y_core_compressed.value_counts())
 
     # Update compression ratio
-    reduction_factor_sampled = len(X_train_full_var) / X_core_sampled.shape[0]
-    print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
+    reduction_factor_compressed = len(X_train_full_var) / X_core_compressed.shape[0]
+    print(f"Compression Ratio after K-Means Sampling: {reduction_factor_compressed:.2f}")
 
     # Record total execution time for this step
     end_time = time.time()
-    execution_times['Stratified Sampling Compression'] = end_time - start_time
-    print(f"Stratified sampling compression completed in {execution_times['Stratified Sampling Compression']:.2f} seconds.")
+    execution_times['K-Means Sampling Compression'] = end_time - start_time
+    print(f"K-Means sampling compression completed in {execution_times['K-Means Sampling Compression']:.2f} seconds.")
 
     # ============================
-    # Step 6.6: Training Random Forest on Stratified Compressed Core Set
+    # Step 6.6: Training Random Forest on K-Means Compressed Core Set
     # ============================
 
-    print("\n=== Step 6.6: Training Random Forest on Stratified Compressed Core Set ===")
+    print("\n=== Step 6.6: Training Random Forest on K-Means Compressed Core Set ===")
     start_time_rf = time.time()
 
-    rf_core_sampled = RandomForestClassifier(
+    rf_core_compressed = RandomForestClassifier(
         n_estimators=100,
         n_jobs=-1,
         class_weight='balanced_subsample',
         bootstrap=True,
         random_state=42
     )
-    print("Training Random Forest on stratified compressed core set...")
-    rf_core_sampled.fit(X_core_sampled, y_core_sampled)
+    print("Training Random Forest on K-Means compressed core set...")
+    rf_core_compressed.fit(X_core_compressed, y_core_compressed)
 
     # Evaluate the model on the test data
-    y_pred_core_sampled = rf_core_sampled.predict(X_test_full_var)
+    y_pred_core_compressed = rf_core_compressed.predict(X_test_full_var)
 
     # Adjust target_names based on actual labels present in y_test_full
     labels = np.unique(y_test_full)
     target_names_adjusted = [class_names[int(i)] for i in labels]
 
-    print("\nClassification Report (Stratified Compressed Core Set Model on Test Data):")
-    print(classification_report(y_test_full, y_pred_core_sampled, labels=labels, target_names=target_names_adjusted, zero_division=0))
+    print("\nClassification Report (K-Means Compressed Core Set Model on Test Data):")
+    print(classification_report(y_test_full, y_pred_core_compressed, labels=labels, target_names=target_names_adjusted, zero_division=0))
 
     # Record execution time
     end_time_rf = time.time()
-    execution_times['Training on Stratified Compressed Core Set'] = end_time_rf - start_time_rf
-    print(f"Random Forest trained and evaluated on stratified compressed core set in {execution_times['Training on Stratified Compressed Core Set']:.2f} seconds.")
+    execution_times['Training on K-Means Compressed Core Set'] = end_time_rf - start_time_rf
+    print(f"Random Forest trained and evaluated on K-Means compressed core set in {execution_times['Training on K-Means Compressed Core Set']:.2f} seconds.")
 
     # =========================
     # Step 7: Comparison of Models
     # =========================
     print("\n=== Step 7: Comparison of Models ===")
 
-    # Evaluate the original model on the test data with variance-thresholded features
+    # Evaluate the original Random Forest model on the test data
     y_pred_full = rf_full.predict(X_test_full_var)
+    accuracy_full = accuracy_score(y_test_full, y_pred_full)
+    f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
+    print(f"Full Model Accuracy: {accuracy_full:.4f}, F1-Score: {f1_full:.4f}")
 
-    # Adjust target_names based on actual labels present in y_test_full
-    labels = np.unique(y_test_full)
-    target_names_adjusted = [class_names[int(i)] for i in labels]
-
-    print("\nClassification Report (Full Model on Test Data):")
-    print(classification_report(y_test_full, y_pred_full, labels=labels, target_names=target_names_adjusted, zero_division=0))
+    # Confusion Matrix for Full Model
+    cm_full = confusion_matrix(y_test_full, y_pred_full)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm_full, annot=True, fmt='d', cmap='Greens',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title('Confusion Matrix - Full Random Forest Model')
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.show()
 
     # Summarize results
     print("\nSummary of Results:")
-    print(f"Full Model Test Accuracy: {rf_full.score(X_test_full_var, y_test_full):.4f}")
-    print(f"Core Model Test Accuracy: {rf_core.score(X_test_full_var, y_test_full):.4f}")
-    print(f"Compressed Core Model Test Accuracy: {rf_core_sampled.score(X_test_full_var, y_test_full):.4f}")
-    print(f"Compression Ratio: {reduction_factor:.2f}")
-    print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
+    print(f"Full Model Test Accuracy: {accuracy_full:.4f}")
+    for model_name, perf in model_performance.items():
+        print(f"{model_name} Test Accuracy: {perf['Accuracy']:.4f}")
+    print(f"K-Means Compressed Core Set Model Accuracy: {rf_core_compressed.score(X_test_full_var, y_test_full):.4f}")
 
     # =========================
     # Step 8: Statistical Comparison and Summary
@@ -514,30 +609,30 @@ def main():
     # Feature count and data size
     full_data_feature_count = X_train_full_var.shape[1]
     core_data_feature_count = X_core.shape[1]
-    sampled_core_data_feature_count = X_core_sampled.shape[1]
+    compressed_core_data_feature_count = X_core_compressed.shape[1]
 
     summary_df = pd.DataFrame({
-        'Dataset': ['Full Data', 'Core Set', 'Stratified Sampled Core'],
-        'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_sampled.shape[0]],
+        'Dataset': ['Full Data', 'Core Set', 'K-Means Compressed Core'],
+        'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_compressed.shape[0]],
         'Accuracy': [
             rf_full.score(X_test_full_var, y_test_full),
             rf_core.score(X_test_full_var, y_test_full),
-            rf_core_sampled.score(X_test_full_var, y_test_full)
+            rf_core_compressed.score(X_test_full_var, y_test_full)
         ],
         'Compression Ratio': [
             1,
             round(reduction_factor, 2),
-            round(reduction_factor_sampled, 2)
+            round(reduction_factor_compressed, 2)
         ],
         'Data Size (KB)': [
             X_train_full_var.nbytes / 1024,
             X_core.nbytes / 1024,
-            X_core_sampled.nbytes / 1024
+            X_core_compressed.nbytes / 1024
         ],
         'Number of Features': [
             full_data_feature_count,
             core_data_feature_count,
-            sampled_core_data_feature_count
+            compressed_core_data_feature_count
         ]
     })
 
@@ -549,8 +644,8 @@ def main():
         y_full=y_train_full,
         X_core=X_core,
         y_core=y_core,
-        X_compressed=X_core_sampled,
-        y_compressed=y_core_sampled,
+        X_compressed=X_core_compressed,
+        y_compressed=y_core_compressed,
         X_test=X_test_full_var,
         y_test=y_test_full,
         feature_names=selected_variance_feature_names,
@@ -567,7 +662,7 @@ def main():
     print("\nPerforming Kolmogorov-Smirnov tests on feature distributions...")
     ks_results = []
     for i in range(X_train_full_var.shape[1]):
-        stat, p_value = ks_2samp(X_train_full_var[:, i], X_core_sampled[:, i])
+        stat, p_value = ks_2samp(X_train_full_var[:, i], X_core_compressed[:, i])
         ks_results.append(p_value)
     ks_pvalues = np.array(ks_results)
 
@@ -584,7 +679,7 @@ def main():
     for idx in feature_indices:
         plt.figure(figsize=(8, 4))
         sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
-        sns.kdeplot(X_core_sampled[:, idx], label='Compressed Data', shade=True)
+        sns.kdeplot(X_core_compressed[:, idx], label='Compressed Data', shade=True)
         plt.title(f'Distribution Comparison for Feature {selected_variance_feature_names[idx]}')
         plt.legend()
         plt.show()
@@ -592,7 +687,7 @@ def main():
     # 3. Compare class distributions using Chi-Square test
     print("\nComparing class distributions using Chi-Square test...")
     full_class_counts = y_train_full.value_counts().sort_index()
-    compressed_class_counts = y_core_sampled.value_counts().sort_index()
+    compressed_class_counts = y_core_compressed.value_counts().sort_index()
     contingency_table = pd.DataFrame({
         'Full Data': full_class_counts,
         'Compressed Data': compressed_class_counts
@@ -608,11 +703,11 @@ def main():
     print("\nVisualizing data using PCA...")
     pca = PCA(n_components=2, random_state=42)
     X_full_pca = pca.fit_transform(X_train_full_var)
-    X_compressed_pca = pca.transform(X_core_sampled)
+    X_compressed_pca = pca.transform(X_core_compressed)
 
     plt.figure(figsize=(8, 6))
     plt.scatter(X_full_pca[:, 0], X_full_pca[:, 1], c=y_train_full, cmap='viridis', alpha=0.1, label='Full Data')
-    plt.scatter(X_compressed_pca[:, 0], X_compressed_pca[:, 1], c=y_core_sampled, cmap='viridis', edgecolor='k', label='Compressed Data')
+    plt.scatter(X_compressed_pca[:, 0], X_compressed_pca[:, 1], c=y_core_compressed, cmap='viridis', edgecolor='k', label='Compressed Data')
     plt.title('PCA Visualization of Full Data vs. Compressed Data')
     plt.legend()
     plt.show()
@@ -652,16 +747,16 @@ def main():
     for idx in top_feature_indices:
         feature_name = selected_variance_feature_names[idx]
         # Kolmogorov-Smirnov Test
-        stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], X_core_sampled[:, idx])
+        stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], X_core_compressed[:, idx])
         # Jensen-Shannon Divergence
         hist_full, bin_edges = np.histogram(X_train_full_var[:, idx], bins=50, density=True)
-        hist_core, _ = np.histogram(X_core_sampled[:, idx], bins=bin_edges, density=True)
+        hist_compressed, _ = np.histogram(X_core_compressed[:, idx], bins=bin_edges, density=True)
         # Add a small value to avoid zeros
         hist_full += 1e-8
-        hist_core += 1e-8
-        js_distance = jensenshannon(hist_full, hist_core)
+        hist_compressed += 1e-8
+        js_distance = jensenshannon(hist_full, hist_compressed)
         # Wasserstein Distance
-        wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], X_core_sampled[:, idx])
+        wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], X_core_compressed[:, idx])
         # Append to logs
         similarity_logs.append({
             'Feature': feature_name,
@@ -675,8 +770,8 @@ def main():
     similarity_logs_df = pd.DataFrame(similarity_logs)
 
     # Save logs to a CSV file
-    similarity_logs_df.to_csv('feature_similarity_logs.csv', index=False)
-    print("\nFeature similarity logs saved to 'feature_similarity_logs.csv'.")
+    similarity_logs_df.to_csv(f'feature_similarity_logs_{len(nodes)}.csv', index=False)
+    print(f"\nFeature similarity logs saved to 'feature_similarity_logs_{len(nodes)}.csv'.")
 
     # 3. Display the logs
     print("\nTop Features Similarity Measures:")
@@ -688,7 +783,7 @@ def main():
         feature_name = selected_variance_feature_names[idx]
         plt.figure(figsize=(8, 4))
         sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
-        sns.kdeplot(X_core_sampled[:, idx], label='Compressed Data', shade=True)
+        sns.kdeplot(X_core_compressed[:, idx], label='Compressed Data', shade=True)
         plt.title(f'Distribution Comparison for Feature: {feature_name}')
         plt.legend()
         plt.show()
@@ -697,7 +792,38 @@ def main():
     end_time = time.time()
     execution_times['Feature Similarity Logging'] = end_time - start_time
     print(f"Feature similarity logging completed in {execution_times['Feature Similarity Logging']:.2f} seconds.")
-    #benchmark.cross_validation_checks(rf_core)
 
+    # =========================
+    # Step 12: Memory and Computational Efficiency
+    # =========================
+    print("\n=== Step 12: Memory and Computational Efficiency ===")
+    from sys import getsizeof
+
+    memory_full = getsizeof(X_train_full_var) / 1024 ** 2  # Convert to MB
+    memory_core = getsizeof(X_core) / 1024 ** 2
+    memory_compressed_core = getsizeof(X_core_compressed) / 1024 ** 2
+    time_full = execution_times['Optimized Entropy-Driven Sampling'] + execution_times.get('Training on Core Set', 0)
+    time_core = execution_times.get('Training on Core Set', 0)
+    time_compressed_core = execution_times.get('Training on K-Means Compressed Core Set', 0)
+
+    print(f"Memory Usage - Full Dataset: {memory_full:.2f} MB")
+    print(f"Memory Usage - Core Dataset: {memory_core:.2f} MB")
+    print(f"Memory Usage - Compressed Core Dataset: {memory_compressed_core:.2f} MB")
+    print(f"Training Time - Full Model: {time_full:.2f} seconds")
+    print(f"Training Time - Core Model: {time_core:.2f} seconds")
+    print(f"Training Time - Compressed Core Model: {time_compressed_core:.2f} seconds")
+
+    # =========================
+    # Final Notes
+    # =========================
+    print("\n=== All Steps Completed ===")
+    print("The code now includes K-Means sampling instead of stratified sampling for further compression.")
+    
+    # End of your script; restore stdout
+    tee.close()
+    sys.stdout = tee.terminal 
+
+
+# Loop through the node counts and call the main function for each
 if __name__ == '__main__':
     main()

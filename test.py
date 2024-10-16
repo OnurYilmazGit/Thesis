@@ -18,8 +18,41 @@ from benchmarking import (plot_learning_curve, evaluate_model, perform_cross_val
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from visualization import Visualization
+from IPython.display import Image
+from sklearn.tree import export_graphviz
+import pydotplus
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
+
+def visualize_random_forest_tree(rf_model, feature_columns, class_names):
+    """ Visualizes the first decision tree from a Random Forest model. """
+    tree_to_visualize = rf_model.estimators_[0]
+
+    # Ensure class names are strings
+    class_names_str = [str(cls) for cls in class_names]
+
+    # Export the tree in DOT format
+    dot_data = export_graphviz(
+        tree_to_visualize,
+        out_file=None,
+        feature_names=feature_columns,
+        class_names=class_names_str,
+        filled=True,
+        rounded=True,
+        special_characters=True,
+        proportion=True,  # Display the probability of each class
+        max_depth=4
+    )
+
+    # Convert to PNG using pydotplus
+    graph = pydotplus.graph_from_dot_data(dot_data)
+    graph.write_png('decision_tree.png')
+
+    # Display the tree
+    return Image(graph.create_png())
+
 
 
 def visualize_lag_diff_features(data_train_fe, target_column='Value'):
@@ -103,6 +136,7 @@ def compare_lag_features(full_data, core_data, target_column='Value', max_lag=5)
     
     comparison_df = pd.DataFrame(list(comparisons.items()), columns=['Metric', 'Value'])
     return comparison_df
+    
 def add_lag_diff_features(data, target_column='Value', max_lag=5):
     """ Adds lag and difference features to the dataset for the specified target column. """
     for lag in range(1, max_lag + 1):
@@ -128,29 +162,6 @@ def compare_lag_features(full_data, core_data, target_column='Value', max_lag=5)
     comparison_df = pd.DataFrame(list(comparisons.items()), columns=['Metric', 'Value'])
     return comparison_df
 
-def stratified_sampling_core_set(X_train_full, y_train_full, compression_ratio=0.005):
-    """
-    Perform stratified sampling on the training data to create a core set.
-    
-    Parameters:
-    - X_train_full: Full training data
-    - y_train_full: Labels of the training data
-    - compression_ratio: The ratio by which the dataset is compressed
-    
-    Returns:
-    - X_core: Core set of training data
-    - y_core: Core set labels
-    """
-    from sklearn.model_selection import StratifiedShuffleSplit
-    
-    sss = StratifiedShuffleSplit(n_splits=1, test_size=compression_ratio, random_state=42)
-    
-    for core_index, _ in sss.split(X_train_full, y_train_full):
-        X_core = X_train_full[core_index]
-        y_core = y_train_full[core_index]
-    
-    return X_core, y_core
-
 def main():
     # Initialize variables to store execution times
     execution_times = {}
@@ -166,7 +177,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(10)] 
+    nodes = [f'node{i}' for i in range(6)] 
     print(f"Length of Nodes: {len(nodes)}")
     
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -231,6 +242,7 @@ def main():
     
     # Create training and test dataframes
     data_train = data.iloc[train_indices].reset_index(drop=True)
+    print("Training Data Shape:", data_train.head())
     data_test = data.iloc[test_indices].reset_index(drop=True)
 
     # ============================================
@@ -264,43 +276,259 @@ def main():
     # Transform test data using the same scaler
     X_test_full_scaled = scaler.transform(X_test_full)
 
+    # ============================================
+    # Step 3.1: Visualize Lag and Difference Features
+    # ============================================
+    print("\n=== Step 3.1: Visualizing Lag and Difference Features ===")
+    #visualize_lag_diff_features(data_train_fe, target_column='Value')
+
+    # Verify that all nodes are present after feature engineering
+    feature_nodes_train = set([feature.split('.')[0] for feature in feature_columns_fe])
+    print("Nodes represented in training features:", feature_nodes_train)
+    
+    feature_nodes_test = set([feature.split('.')[0] for feature in feature_columns_fe])
+    
+    # Record execution time
+    end_time = time.time()
+    execution_times['Feature Engineering and Normalization'] = end_time - start_time
+    print(f"Feature engineering and normalization completed in {execution_times['Feature Engineering and Normalization']:.2f} seconds.")
+    # ==========================================
+    # Step 4: Feature Selection using Variance Threshold
+    # ==========================================
+    print("\n=== Step 4: Feature Selection using Variance Threshold ===")
+    start_time = time.time()
+
+    # Apply Variance Threshold for feature selection
+    selector = VarianceThreshold(threshold=0.1)
+    X_train_full_scaled_fs = selector.fit_transform(X_train_full_scaled)
+    X_test_full_scaled_fs = selector.transform(X_test_full_scaled)
+
+    # Update feature columns based on the selected features
+    selected_features = selector.get_support(indices=True)
+    feature_columns = [feature_columns_fe[i] for i in selected_features]
+
+    # Print feature count before and after selection
+    print(f"Old Feature Count: {X_train_full_scaled.shape[1]}")
+    print(f"New Feature Count: {X_train_full_scaled_fs.shape[1]}")
+
+    # Record execution time
+    end_time = time.time()
+    execution_times['Variance Threshold Feature Selection'] = end_time - start_time
+    print(f"Variance Threshold feature selection completed in {execution_times['Variance Threshold Feature Selection']:.2f} seconds.")
 
     # ==========================================
-    # Step 4: Stratified Sampling for Core Set Selection
+    # Step 5: Training Random Forest on Selected Data
     # ==========================================
-    print("\n=== Step 4: Selecting Core Set using Stratified Sampling ===")
+    start_time = time.time()
+    print("\n=== Step 5: Training Random Forest on Selected Data ===")
+
+    # Train Random Forest on the selected training data
+    rf_selected = RandomForestClassifier(max_depth=200, n_jobs=-1, random_state=42)
+    rf_selected.fit(X_train_full_scaled_fs, y_train_full)
+
+    # Evaluate the full model on the selected test data
+    metrics_selected = evaluate_model(
+        rf_selected, X_test_full_scaled_fs, y_test_full, class_names,
+        model_name="Random Forest (Selected Data)",
+        filename_prefix="rf_selected_data"
+    )
+    accuracy_selected = metrics_selected['accuracy']
+
+    print(f"Accuracy of Random Forest after feature selection: {accuracy_selected:.4f}")
+
+    end_time = time.time()
+    execution_times['Random Forest (Selected Data)'] = end_time - start_time
+    print(f"Random Forest trained and evaluated in {execution_times['Random Forest (Selected Data)']:.2f} seconds.")
+
+    # ==========================================
+    # Step 5.1: Feature Importance Analysis
+    # ==========================================
+    print("\n=== Step 5.1: Feature Importance Analysis ===")
+
+    # Get feature importances from the model
+    importances = rf_selected.feature_importances_
+
+    # Create a DataFrame for feature importances
+    feature_importances = pd.DataFrame({
+        'Feature': feature_columns,
+        'Importance': importances
+    })
+
+
+    # Step 5: Visualize the first Decision Tree from the Random Forest
+    print("=== Step 5: Visualizing a Decision Tree ===")
+    tree_image = visualize_random_forest_tree(rf_selected, feature_columns, class_names=np.unique(y))
+
+    print("Visualization saved as 'decision_tree.png'")
+
+    # Display top 20 features
+    top_features = feature_importances.sort_values(by='Importance', ascending=False).head(20)
+    print("\nTop 20 Feature Importances:")
+    print(top_features)
+
     
-    X_core, y_core = stratified_sampling_core_set(X_train_full_scaled, y_train_full, compression_ratio=0.005)
+    # Save feature importances to a CSV file for reference
+    feature_importances.to_csv('feature_importances.csv', index=False)
+
+    # Function to map feature names to their source CSV files
+    def map_feature_to_csv(feature_name):
+        # Assuming feature names are in the format 'nodeX.metric' or 'nodeX.metric_lag_Y'
+        # Extract the sensor name before the first '_lag_' or '_diff_' or other suffix
+        return feature_name.split('_lag_')[0].split('_diff_')[0]
+
+    # Apply the mapping to all features
+    feature_importances['Source_CSV'] = feature_importances['Feature'].apply(map_feature_to_csv)
+
+    # Aggregate importances by CSV file
+    csv_importances = feature_importances.groupby('Source_CSV')['Importance'].sum().reset_index()
+
+    # Sort CSV files by aggregated importance
+    csv_importances_sorted = csv_importances.sort_values(by='Importance', ascending=False)
     
-    print(f"Core Set Size: {X_core.shape[0]} samples")
 
-    # Visualize for core set
-    core_set_df = pd.DataFrame(X_core, columns=feature_columns_fe[:X_core.shape[1]])
-    core_set_df['Value'] = y_core
-    core_set_df['Time'] = data_train_fe['Time'].iloc[core_set_df.index]  # Assuming Time is in the original dataset
+    # Display the top 10 CSV files contributing to the model
+    print("\nTop 10 CSV Files by Aggregated Feature Importance:")
+    print(csv_importances_sorted.head(10))
 
-    # Add lag and difference features to both full and core datasets
-    print("Adding lag and difference features...")
-    data_train_fe = add_lag_diff_features(data_train_fe, target_column='Value', max_lag=5)
-    core_set_df = add_lag_diff_features(core_set_df, target_column='Value', max_lag=5)
+    # Save CSV importances to a CSV file for reference
+    csv_importances_sorted.to_csv('csv_importances.csv', index=False)
 
-    print("Visualizing for Core Set:")
-    visualize_lag_diff_features_multiple(core_set_df, target_column='Value', max_lag=5)
+    # Plot Top 20 Features
+    plt.figure(figsize=(10, 8))
+    sns.barplot(x='Importance', y='Feature', data=top_features)
+    plt.title('Top 20 Feature Importances')
+    plt.tight_layout()
+    plt.savefig('top_20_feature_importances.png')
+    plt.show()
+
+    # Plot Top 10 CSV Files
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x='Importance', y='Source_CSV', data=csv_importances_sorted.head(10))
+    plt.title('Top 10 CSV Files by Aggregated Feature Importance')
+    plt.tight_layout()
+    plt.savefig('top_10_csv_importances.png')
+    plt.show()
+
+    # ==========================================
+    # Step 6: Selecting Core Set based on Stratified Sampling
+    # ==========================================
+    start_time = time.time()
+    print("\n=== Step 6: Selecting Core Set based on Stratified Sampling ===")
+
+    compression_ratio = 0.002  # Adjust as needed
+
+    # Select the core set from the training data only
+    preprocessor = DataPreprocessor(data_train_fe, window_size=20)  # Re-instantiate if needed
+    core_set, X_core, y_core = preprocessor.select_core_set_by_rf(
+        X_train_full_scaled_fs, y_train_full, data_train_fe.iloc[:, :], compression_ratio=compression_ratio)
+
+
+    core_set_size = X_core.nbytes / 1024  # in KB
+    reduction_factor = len(X_train_full_scaled_fs) / len(X_core)
+
+    end_time = time.time()
+    execution_times['Core Set Selection'] = end_time - start_time
+    print(f"Core set selection completed in {execution_times['Core Set Selection']:.2f} seconds.")
+    print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
+
+    # Check class distribution in the core set
+    unique, counts = np.unique(y_core, return_counts=True)
+    class_counts = dict(zip(unique, counts))
+    print("Class distribution in core set:", class_counts)
+
+    # =============================================
+    # Step 7: Training Random Forest on Core Set Data
+    # =============================================
+    start_time = time.time()
+    print("\n=== Step 7: Training Random Forest on Core Set Data ===")
+
+    X_train_core, X_test_core, y_train_core, y_test_core = train_test_split(
+        X_core, y_core, test_size=0.2, random_state=42, stratify=y_core)
+
+    rf_core = RandomForestClassifier(max_depth=200, n_jobs=-1, random_state=42)
+    rf_core.fit(X_train_core, y_train_core)
+
+    # Evaluate the core model on the core test data
+    metrics_core = evaluate_model(
+        rf_core, X_test_core, y_test_core, class_names,
+        model_name="Random Forest (Core Set)",
+        filename_prefix="rf_core_data"
+    )
+    accuracy_core = metrics_core['accuracy']
+
+    end_time = time.time()
+    execution_times['Random Forest (Core Set)'] = end_time - start_time
+    print(f"Random Forest trained and evaluated on core set in {execution_times['Random Forest (Core Set)']:.2f} seconds.")
+
+    # ==========================================
+    # Step 7.1: Visualizing Lag and Difference Features for Core Set and Full Dataset
+    # ==========================================
+    print("\n=== Step 7.1: Visualizing Lag and Difference Features for Full Dataset and Core Set ===")
 
     # Visualize for full dataset
     print("Visualizing for Full Dataset:")
-    visualize_lag_diff_features_multiple(data_train_fe, target_column='Value', max_lag=5)
+    #visualize_lag_diff_features_multiple(data_train_fe, target_column='Value', max_lag=5)
+
+    # Visualize for core set
+    core_set_df = core_set.copy()
+    core_set_df['Time'] = data_train_fe['Time'].iloc[core_set.index]  # Assuming Time is in the original dataset
+    print("Visualizing for Core Set:")
+    #visualize_lag_diff_features_multiple(core_set_df, target_column='Value', max_lag=5)
 
     # Perform comparison and print results
     core_comparison_df = compare_lag_features(data_train_fe, core_set_df, target_column='Value', max_lag=5)
     print("\nComparison between Full Dataset and Core Set Lag Features:")
     print(core_comparison_df)
 
+
+    # =============================================
+    # Step 8: Evaluating Core Set Model on Full Test Data
+    # =============================================
+    print("\n=== Step 8: Evaluating Core Set Model on Full Test Data ===")
+
+    # Evaluate the core model on the same test set as the full model
+    metrics_full_core = evaluate_model(
+        rf_core, X_test_full_scaled_fs, y_test_full, class_names,
+        model_name="Core Set Model on Full Test Data",
+        filename_prefix="core_model_on_full_test"
+    )
+    accuracy_full_core = metrics_full_core['accuracy']
+    print(f"Accuracy of Core Model on Full Test Data: {accuracy_full_core:.4f}")
+
+    # =========================
+    # Step 9: Statistical Comparison and Summary of Results
+    # =========================
+    print("\n=== Step 9: Statistical Comparison and Summary of Results ===")
+
+    # Calculate feature counts
+    full_data_feature_count = X_train_full_scaled_fs.shape[1]
+    core_data_feature_count = X_core.shape[1]
+
+    summary_df = pd.DataFrame({
+        'Dataset': ['Full Data', 'Core Set', 'Core Model on Full Test Data'],
+        'Samples': [X_train_full_scaled_fs.shape[0], X_core.shape[0], X_test_full_scaled_fs.shape[0]],
+        'Accuracy': [metrics_selected['accuracy'], metrics_core['accuracy'], metrics_full_core['accuracy']],
+        'Precision': [metrics_selected['precision'], metrics_core['precision'], metrics_full_core['precision']],
+        'Recall': [metrics_selected['recall'], metrics_core['recall'], metrics_full_core['recall']],
+        'F1 Score': [metrics_selected['f1_score'], metrics_core['f1_score'], metrics_full_core['f1_score']],
+        'Data Size (KB)': [X_train_full_scaled_fs.nbytes / 1024, core_set_size, X_test_full_scaled_fs.nbytes / 1024],
+        'Number of Features': [full_data_feature_count, core_data_feature_count, full_data_feature_count]
+    })
+
+    print(summary_df.to_string(index=False))
+    print(f'Compression Ratio: {X_train_full_scaled_fs.nbytes / core_set_size:.2f}')
+
+    # Visaulize lag and difference features, 
+
+
+
     # =========================
     # Step 10: Additional Evaluations (Optional)
     # =========================
     # For example, feature importance analysis, error analysis, etc.
     # You can add these steps as needed.
+
+
 
 if __name__ == '__main__':
     main()

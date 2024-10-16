@@ -10,22 +10,23 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, precision_recall_curve
-from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
-from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance
-from scipy.spatial.distance import cdist
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
+from scipy.special import entr
+from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance, ttest_rel
+from scipy.spatial.distance import jensenshannon
 from data_loader import DataLoader
 from benchmarking2 import Benchmarking
-from sklearn.cluster import KMeans
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import make_scorer, accuracy_score, f1_score
 import gc
 import sys
+import os
 from datetime import datetime
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.cluster import MiniBatchKMeans
-from scipy.spatial.distance import jensenshannon
-
 
 gc.enable()
 
@@ -311,6 +312,7 @@ def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_
 
     return X_train_full_var, X_test_full_var, selected_variance_feature_names
 
+
 def main():
     # Initialize variables to store execution times
     execution_times = {}
@@ -330,331 +332,324 @@ def main():
     tee = TeeOutput(node_count)
     sys.stdout = tee  # Redirect all output
 
-    try:
-        # Your original code starts here
-        print(f"Running process for node count: {node_count}")
-        
-        # ================================
-        # Step 1: Data Loading and Merging
-        # ================================
-        data_final = step1_data_loading_and_merging(responses_path, sensors_path, nodes)
 
-        # ================================
-        # Step 2: Time-Based Splitting
-        # ================================
-        data_train, data_test = step2_time_based_splitting(data_final, split_ratio=0.8)
+    # Your original code starts here
+    print(f"Running process for node count: {node_count}")
+    
+    # ================================
+    # Step 1: Data Loading and Merging
+    # ================================
+    data_final = step1_data_loading_and_merging(responses_path, sensors_path, nodes)
 
-        # ================================
-        # Step 3: Data Preparation and Normalization
-        # ================================
-        X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns = step3_data_preparation_and_normalization(
-            data_train, data_test, features_to_exclude=['Time', 'Value']
-        )
+    # ================================
+    # Step 2: Time-Based Splitting
+    # ================================
+    data_train, data_test = step2_time_based_splitting(data_final, split_ratio=0.8)
 
-        # ================================
-        # Step 4: Variance Threshold Feature Selection
-        # ================================
-        X_train_full_var, X_test_full_var, selected_variance_feature_names = step4_variance_threshold_feature_selection(
-            X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1
-        )
+    # ================================
+    # Step 3: Data Preparation and Normalization
+    # ================================
+    X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns = step3_data_preparation_and_normalization(
+        data_train, data_test, features_to_exclude=['Time', 'Value']
+    )
 
-        # Free up memory
-        del X_train_full_scaled, X_test_full_scaled
-        gc.collect()
+    # ================================
+    # Step 4: Variance Threshold Feature Selection
+    # ================================
+    X_train_full_var, X_test_full_var, selected_variance_feature_names = step4_variance_threshold_feature_selection(
+        X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1
+    )
 
-        # ================================
-        # KMeans Clustering for Core Dataset Selection
-        # ================================
-        print("\n=== KMeans Clustering for Core Dataset Selection ===")
-        start_time = time.time()
+    # Free up memory
+    del X_train_full_scaled, X_test_full_scaled
+    gc.collect()
 
-        # Decide on the number of clusters
-        num_clusters = 500  # Adjust this number as needed
-        print(f"Number of clusters: {num_clusters}")
+    # ================================
+    # Optimized Entropy-Driven Sampling Strategy with Predictive Uncertainties
+    # ================================
+    print("\n=== Optimized Entropy-Driven Sampling Strategy ===")
+    start_time = time.time()
 
-        # Apply KMeans clustering
-        kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=1024, random_state=42)
-        kmeans.fit(X_train_full_var)
+    # Step 1: Train Random Forest on the full training data with variance-thresholded features
+    rf_full = RandomForestClassifier(
+        n_estimators=250,
+        max_depth=20,
+        random_state=42,
+        n_jobs=-1,
+        class_weight='balanced_subsample',
+        min_samples_leaf=5,
+        criterion='entropy',
+        bootstrap=True,
+    )
+    print("Training Random Forest on variance-thresholded full training data...")
+    rf_full.fit(X_train_full_var, y_train_full)
+    print("Random Forest training completed.")
 
-        # Find the closest data point in each cluster to the cluster centroid
-        cluster_centers = kmeans.cluster_centers_
-        labels = kmeans.labels_
+    # Step 2: Compute Predictive Uncertainties using Entropy
+    # Get predicted class probabilities for training data
+    probs = rf_full.predict_proba(X_train_full_var)
+    print("Predicted class probabilities shape:", probs.shape)
 
-        # Compute distances from each point to its cluster center
-        distances = cdist(cluster_centers, X_train_full_var, 'euclidean')
+    # Compute entropy for each sample
+    predictive_entropies = entr(probs).sum(axis=1)
+    print("Predictive entropies shape:", predictive_entropies.shape)
 
-        # For each cluster, select the point closest to the centroid
-        closest_indices = []
-        for i in range(num_clusters):
-            cluster_indices = np.where(labels == i)[0]
-            if len(cluster_indices) == 0:
-                continue
-            cluster_distances = distances[i, cluster_indices]
-            closest_index = cluster_indices[np.argmin(cluster_distances)]
-            closest_indices.append(closest_index)
+    # Determine thresholds
+    high_uncertainty_threshold = np.percentile(predictive_entropies, 99)
+    low_uncertainty_threshold = np.percentile(predictive_entropies, 1)
 
-        # Create the Core Dataset
-        X_core = X_train_full_var[closest_indices]
-        y_core = y_train_full.iloc[closest_indices].reset_index(drop=True)
+    # Select samples
+    high_uncertainty_indices = np.where(predictive_entropies >= high_uncertainty_threshold)[0]
+    low_uncertainty_indices = np.where(predictive_entropies <= low_uncertainty_threshold)[0]
 
-        # Print the Class Distribution in the Core Set
-        class_distribution_core = y_core.value_counts(normalize=True)
-        print("\nClass distribution in core set (proportion):")
-        print(class_distribution_core)
+    # Combine indices
+    selected_indices = np.concatenate([high_uncertainty_indices, low_uncertainty_indices])
 
-        # Also print counts
-        print("\nClass counts in core set:")
-        print(y_core.value_counts())
+    # Step 4: Ensure Balanced Class Distribution
+    # Calculate Class Proportions in Full Dataset
+    class_distribution_full = y_train_full.value_counts(normalize=True)
+    print("\nClass distribution in full dataset (proportion):")
+    print(class_distribution_full)
 
-        # Check Core Set Size and Compression Ratio
-        core_set_size = X_core.nbytes / 1024  # in KB
-        reduction_factor = len(X_train_full_var) / len(X_core)
+    # Create the Core Dataset
+    X_core = X_train_full_var[selected_indices]
+    y_core = y_train_full.iloc[selected_indices].reset_index(drop=True)
 
-        end_time = time.time()
-        execution_times['KMeans Clustering'] = end_time - start_time
-        print(f"KMeans clustering completed in {execution_times['KMeans Clustering']:.2f} seconds.")
-        print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
-        print(f"Full set size: {X_train_full_var.nbytes / 1024:.2f} KB")
+    # Step 6: Print the Class Distribution in the Core Set
+    class_distribution_core = y_core.value_counts(normalize=True)
+    print("\nClass distribution in core set (proportion):")
+    print(class_distribution_core)
 
-        # ============================
-        # Step 6: Training Models on Core Set Data
-        # ============================
-        start_time = time.time()
-        print("\n=== Step 6: Training Models on Core Set Data ===")
+    # Also print counts
+    print("\nClass counts in core set:")
+    print(y_core.value_counts())
 
-        # Initialize models
-        models = {
-            'Random Forest': RandomForestClassifier(
-                n_estimators=150,
-                n_jobs=-1,
-                max_depth=20,
-                random_state=42,
-                class_weight='balanced_subsample',
-                bootstrap=True
-            )
-        }
+    # Step 7: Check Core Set Size and Compression Ratio
+    core_set_size = X_core.nbytes / 1024  # in KB
+    reduction_factor = len(X_train_full_var) / len(X_core)
 
-        model_performance = {}
+    end_time = time.time()
+    execution_times['Optimized Entropy-Driven Sampling'] = end_time - start_time
+    print(f"Optimized entropy-driven sampling completed in {execution_times['Optimized Entropy-Driven Sampling']:.2f} seconds.")
+    print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
+    print(f"Full set size: {X_train_full_var.nbytes / 1024:.2f} KB")
 
-        for model_name, model in models.items():
-            print(f"\nTraining {model_name} on core set...")
-            model.fit(X_core, y_core)
-            y_pred = model.predict(X_test_full_var)
-            accuracy = accuracy_score(y_test_full, y_pred)
-            f1 = f1_score(y_test_full, y_pred, average='weighted')
-            model_performance[model_name] = {
-                'Model': model,
-                'Accuracy': accuracy,
-                'F1-Score': f1,
-                'Predictions': y_pred
-            }
-            print(f"{model_name} Accuracy: {accuracy:.4f}, F1-Score: {f1:.4f}")
-            # Classification Report
-            print(f"\nClassification Report ({model_name} on Test Data):")
-            print(classification_report(y_test_full, y_pred, target_names=class_names, zero_division=0))
+    # Check class distribution in the core set
+    unique, counts = np.unique(y_core, return_counts=True)
+    class_counts = dict(zip(unique, counts))
+    print("Class distribution in core set:", class_counts)
 
-            # Confusion Matrix
-            cm = confusion_matrix(y_test_full, y_pred)
-            plt.figure(figsize=(8, 6))
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                        xticklabels=class_names, yticklabels=class_names)
-            plt.title(f'Confusion Matrix - {model_name}')
-            plt.ylabel('Actual')
-            plt.xlabel('Predicted')
-            plt.show()
+    # ============================
+    # Step 5: Hyperparameter Tuning (Optional but Recommended)
+    # ============================
+    # You can include hyperparameter tuning here using GridSearchCV or RandomizedSearchCV
 
-        # Record execution time
-        end_time = time.time()
-        execution_times['Training on Core Set'] = end_time - start_time
-        print(f"Models trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
+    # ============================
+    # Step 6: Training Models on Core Set Data
+    # ============================
+    start_time = time.time()
+    print("\n=== Step 6: Training Models on Core Set Data ===")
 
-        # Select the Random Forest model trained on the core set for further steps
-        rf_core = model_performance['Random Forest']['Model']
-        y_pred_core = model_performance['Random Forest']['Predictions']
-
-        # ============================
-        # Step 6.5: Further Compression Using Stratified Sampling
-        # ============================
-        print("\n=== Step 6.5: Further Compression Using Stratified Sampling ===")
-        start_time = time.time()
-
-        # Desired compression ratio
-        desired_compression_ratio = 2  # Adjust as needed
-        sampling_fraction = 1 / desired_compression_ratio  # e.g., 1/100 = 0.01
-
-        # Calculate minimum sampling fraction based on number of classes
-        n_classes = len(class_names)  # 7
-        min_sampling_fraction = n_classes / len(X_core)  # 7/500 = 0.014
-
-        if sampling_fraction < min_sampling_fraction:
-            sampling_fraction = min_sampling_fraction
-            print(f"Adjusted sampling fraction to {sampling_fraction:.4f} to ensure at least one sample per class.")
-        else:
-            print(f"Sampling fraction for desired compression ratio: {sampling_fraction:.4f}")
-
-        # Perform stratified sampling on the core set
-        try:
-            X_core_sampled, _, y_core_sampled, _ = train_test_split(
-                X_core, y_core, 
-                train_size=sampling_fraction, 
-                stratify=y_core, 
-                random_state=42
-            )
-        except ValueError as e:
-            print(f"Error during stratified sampling: {e}")
-            print("Adjusting sampling_fraction to meet the minimum class requirement.")
-            sampling_fraction = min_sampling_fraction
-            X_core_sampled, _, y_core_sampled, _ = train_test_split(
-                X_core, y_core, 
-                train_size=sampling_fraction, 
-                stratify=y_core, 
-                random_state=42
-            )
-
-        # Verify the size of the compressed core set
-        print(f"Compressed core set size: {X_core_sampled.shape[0]} samples")
-
-        # Check class distribution in compressed core set
-        print("Class counts in compressed core set:")
-        print(y_core_sampled.value_counts())
-
-        # Update compression ratio
-        reduction_factor_sampled = len(X_train_full_var) / X_core_sampled.shape[0]
-        print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
-
-        # Record execution time for this step
-        end_time = time.time()
-        execution_times['Stratified Sampling Compression'] = end_time - start_time
-        print(f"Stratified sampling compression completed in {execution_times['Stratified Sampling Compression']:.2f} seconds.")
-
-        # ============================
-        # Step 6.6: Training Random Forest on Stratified Compressed Core Set
-        # ============================
-        print("\n=== Step 6.6: Training Random Forest on Stratified Compressed Core Set ===")
-        start_time_rf = time.time()
-
-        rf_core_sampled = RandomForestClassifier(
-            n_estimators=100,
+    # Initialize models
+    models = {
+        'Random Forest': RandomForestClassifier(
+            n_estimators=150,
             n_jobs=-1,
-            class_weight='balanced_subsample',
-            bootstrap=True,
-            random_state=42
-        )
-        print("Training Random Forest on stratified compressed core set...")
-        rf_core_sampled.fit(X_core_sampled, y_core_sampled)
-
-        # Evaluate the model on the test data
-        y_pred_core_sampled = rf_core_sampled.predict(X_test_full_var)
-
-        # Adjust target_names based on actual labels present in y_test_full
-        labels = np.unique(y_test_full)
-        target_names_adjusted = [class_names[int(i)] for i in labels]
-
-        print("\nClassification Report (Stratified Compressed Core Set Model on Test Data):")
-        print(classification_report(y_test_full, y_pred_core_sampled, labels=labels, target_names=target_names_adjusted, zero_division=0))
-
-        # Record execution time
-        end_time_rf = time.time()
-        execution_times['Training on Stratified Compressed Core Set'] = end_time_rf - start_time_rf
-        print(f"Random Forest trained and evaluated on stratified compressed core set in {execution_times['Training on Stratified Compressed Core Set']:.2f} seconds.")
-
-        # ============================
-        # Step 7: Comparison of Models
-        # ============================
-        print("\n=== Step 7: Comparison of Models ===")
-
-        # Initialize the full Random Forest model
-        rf_full = RandomForestClassifier(
-            n_estimators=250,
             max_depth=20,
             random_state=42,
-            n_jobs=-1,
             class_weight='balanced_subsample',
-            min_samples_leaf=5,
-            criterion='entropy',
-            bootstrap=True,
+            bootstrap=True
         )
+    }
 
-        # Train the full Random Forest model on the full training data
-        print("\nTraining Full Random Forest Model on Full Training Data...")
-        rf_full.fit(X_train_full_var, y_train_full)
-        print("Training completed.")
+    model_performance = {}
 
-        # Evaluate the full Random Forest model on the test data
-        print("Evaluating Full Random Forest Model on Test Data...")
-        y_pred_full = rf_full.predict(X_test_full_var)
-        accuracy_full = accuracy_score(y_test_full, y_pred_full)
-        f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
+    for model_name, model in models.items():
+        print(f"\nTraining {model_name} on core set...")
+        model.fit(X_core, y_core)
+        y_pred = model.predict(X_test_full_var)
+        accuracy = accuracy_score(y_test_full, y_pred)
+        f1 = f1_score(y_test_full, y_pred, average='weighted')
+        model_performance[model_name] = {
+            'Model': model,
+            'Accuracy': accuracy,
+            'F1-Score': f1,
+            'Predictions': y_pred
+        }
+        print(f"{model_name} Accuracy: {accuracy:.4f}, F1-Score: {f1:.4f}")
+        # Classification Report
+        print(f"\nClassification Report ({model_name} on Test Data):")
+        print(classification_report(y_test_full, y_pred, target_names=class_names, zero_division=0))
 
-        print(f"Full Model Accuracy: {accuracy_full:.4f}, F1-Score: {f1_full:.4f}")
-
-        # Confusion Matrix for Full Model
-        cm_full = confusion_matrix(y_test_full, y_pred_full)
+        # Confusion Matrix
+        cm = confusion_matrix(y_test_full, y_pred)
         plt.figure(figsize=(8, 6))
-        sns.heatmap(cm_full, annot=True, fmt='d', cmap='Greens',
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                     xticklabels=class_names, yticklabels=class_names)
-        plt.title('Confusion Matrix - Full Random Forest Model')
+        plt.title(f'Confusion Matrix - {model_name}')
         plt.ylabel('Actual')
         plt.xlabel('Predicted')
         plt.show()
 
-        # Summarize results
-        print("\nSummary of Results:")
-        print(f"Full Model Test Accuracy: {accuracy_full:.4f}")
-        for model_name, perf in model_performance.items():
-            print(f"{model_name} Test Accuracy: {perf['Accuracy']:.4f}")
+    # Record execution time
+    end_time = time.time()
+    execution_times['Training on Core Set'] = end_time - start_time
+    print(f"Models trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
 
-        # =========================
-        # Step 8: Statistical Comparison and Summary
-        # =========================
-        print("\n=== Step 8: Statistical Comparison and Summary ===")
+    # Select the Random Forest model trained on the core set for further steps
+    rf_core = model_performance['Random Forest']['Model']
+    y_pred_core = model_performance['Random Forest']['Predictions']
 
-        # Feature count and data size
-        full_data_feature_count = X_train_full_var.shape[1]
-        core_data_feature_count = X_core.shape[1]
-        sampled_core_data_feature_count = X_core_sampled.shape[1]
+    # ============================
+    # Step 6.5: Further Compression Using Stratified Sampling
+    # ============================
 
-        summary_df = pd.DataFrame({
-            'Dataset': ['Full Data', 'Core Set', 'Stratified Sampled Core'],
-            'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_sampled.shape[0]],
-            'Accuracy': [
-                rf_full.score(X_test_full_var, y_test_full),
-                rf_core.score(X_test_full_var, y_test_full),
-                rf_core_sampled.score(X_test_full_var, y_test_full)
-            ],
-            'Compression Ratio': [
-                1,
-                round(reduction_factor, 2),
-                round(reduction_factor_sampled, 2)
-            ],
-            'Data Size (KB)': [
-                X_train_full_var.nbytes / 1024,
-                X_core.nbytes / 1024,
-                X_core_sampled.nbytes / 1024
-            ],
-            'Number of Features': [
-                full_data_feature_count,
-                core_data_feature_count,
-                sampled_core_data_feature_count
-            ]
-        })
+    print("\n=== Step 6.5: Further Compression Using Stratified Sampling ===")
+    start_time = time.time()
 
-        print("\n=== Summary Table ===")
-        print(summary_df)
+    from sklearn.model_selection import train_test_split
 
-        # You can include additional visualizations and statistical tests as in your original code.
+    # Decide on the sampling fraction to achieve the desired compression ratio
+    desired_compression_ratio = 50  # Adjust as needed
+    sampling_fraction = 1 / desired_compression_ratio  # e.g., 1/50 = 0.02
 
-        # =========================
-        # Final Notes
-        # =========================
-        print("\n=== All Steps Completed ===")
-        print("The code has been modified to use KMeans clustering for core dataset selection. You can experiment with different numbers of clusters to optimize accuracy.")
+    print(f"Sampling fraction for desired compression ratio: {sampling_fraction:.4f}")
 
-    finally:
-        # Restore stdout
-        tee.close()
-        sys.stdout = tee.terminal 
+    # Perform stratified sampling on the core set
+    X_core_sampled, _, y_core_sampled, _ = train_test_split(
+        X_core, y_core, 
+        train_size=sampling_fraction, 
+        stratify=y_core, 
+        random_state=42
+    )
 
+    # Verify the size of the compressed core set
+    print(f"Compressed core set size: {X_core_sampled.shape[0]} samples")
+
+    # Check class distribution in compressed core set
+    print("Class counts in compressed core set:")
+    print(y_core_sampled.value_counts())
+
+    # Update compression ratio
+    reduction_factor_sampled = len(X_train_full_var) / X_core_sampled.shape[0]
+    print(f"Compression Ratio after Stratified Sampling: {reduction_factor_sampled:.2f}")
+
+    # Record total execution time for this step
+    end_time = time.time()
+    execution_times['Stratified Sampling Compression'] = end_time - start_time
+    print(f"Stratified sampling compression completed in {execution_times['Stratified Sampling Compression']:.2f} seconds.")
+
+    # ============================
+    # Step 6.6: Training Random Forest on Stratified Compressed Core Set
+    # ============================
+
+    print("\n=== Step 6.6: Training Random Forest on Stratified Compressed Core Set ===")
+    start_time_rf = time.time()
+
+    rf_core_sampled = RandomForestClassifier(
+        n_estimators=100,
+        n_jobs=-1,
+        class_weight='balanced_subsample',
+        bootstrap=True,
+        random_state=42
+    )
+    print("Training Random Forest on stratified compressed core set...")
+    rf_core_sampled.fit(X_core_sampled, y_core_sampled)
+
+    # Evaluate the model on the test data
+    y_pred_core_sampled = rf_core_sampled.predict(X_test_full_var)
+
+    # Adjust target_names based on actual labels present in y_test_full
+    labels = np.unique(y_test_full)
+    target_names_adjusted = [class_names[int(i)] for i in labels]
+
+    print("\nClassification Report (Stratified Compressed Core Set Model on Test Data):")
+    print(classification_report(y_test_full, y_pred_core_sampled, labels=labels, target_names=target_names_adjusted, zero_division=0))
+
+    # Record execution time
+    end_time_rf = time.time()
+    execution_times['Training on Stratified Compressed Core Set'] = end_time_rf - start_time_rf
+    print(f"Random Forest trained and evaluated on stratified compressed core set in {execution_times['Training on Stratified Compressed Core Set']:.2f} seconds.")
+
+
+    # =========================
+    # Step 7: Comparison of Models
+    # =========================
+    print("\n=== Step 7: Comparison of Models ===")
+
+    # Evaluate the original Random Forest model on the test data
+    y_pred_full = rf_full.predict(X_test_full_var)
+    accuracy_full = accuracy_score(y_test_full, y_pred_full)
+    f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
+    print(f"Full Model Accuracy: {accuracy_full:.4f}, F1-Score: {f1_full:.4f}")
+
+    # Confusion Matrix for Full Model
+    cm_full = confusion_matrix(y_test_full, y_pred_full)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm_full, annot=True, fmt='d', cmap='Greens',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title('Confusion Matrix - Full Random Forest Model')
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    plt.show()
+
+    # Summarize results
+    print("\nSummary of Results:")
+    print(f"Full Model Test Accuracy: {accuracy_full:.4f}")
+    for model_name, perf in model_performance.items():
+        print(f"{model_name} Test Accuracy: {perf['Accuracy']:.4f}")
+
+
+    # =========================
+    # Step 8: Statistical Comparison and Summary
+    # =========================
+    print("\n=== Step 8: Statistical Comparison and Summary ===")
+
+    # Feature count and data size
+    full_data_feature_count = X_train_full_var.shape[1]
+    core_data_feature_count = X_core.shape[1]
+    sampled_core_data_feature_count = X_core_sampled.shape[1]
+
+    summary_df = pd.DataFrame({
+        'Dataset': ['Full Data', 'Core Set', 'Stratified Sampled Core'],
+        'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_sampled.shape[0]],
+        'Accuracy': [
+            rf_full.score(X_test_full_var, y_test_full),
+            rf_core.score(X_test_full_var, y_test_full),
+            rf_core_sampled.score(X_test_full_var, y_test_full)
+        ],
+        'Compression Ratio': [
+            1,
+            round(reduction_factor, 2),
+            round(reduction_factor_sampled, 2)
+        ],
+        'Data Size (KB)': [
+            X_train_full_var.nbytes / 1024,
+            X_core.nbytes / 1024,
+            X_core_sampled.nbytes / 1024
+        ],
+        'Number of Features': [
+            full_data_feature_count,
+            core_data_feature_count,
+            sampled_core_data_feature_count
+        ]
+    })
+
+    print("\n=== Summary Table ===")
+    print(summary_df)
+
+    benchmark = Benchmarking(
+        X_full=X_train_full_var,
+        y_full=y_train_full,
+        X_core=X_core,
+        y_core=y_core,
+        X_compressed=X_core_sampled,
+        y_compressed=y_core_sampled,
+        X_test=X_test_full_var,
+        y_test=y_test_full,
+        feature_names=selected_variance_feature_names,
+        class_names=class_names
+    )
 
     # =========================
     # Step 9: Statistical Validation of Compression
@@ -900,6 +895,7 @@ def main():
     # End of your script; restore stdout
     tee.close()
     sys.stdout = tee.terminal 
+
 
 # Loop through the node counts and call the main function for each
 if __name__ == '__main__':

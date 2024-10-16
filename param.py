@@ -1,17 +1,20 @@
+
+# main.py
+
 import pandas as pd
 import numpy as np
+import os
+import warnings
 import time
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, StratifiedShuffleSplit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import VarianceThreshold
-from scipy.special import entr
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, cohen_kappa_score, matthews_corrcoef
+from scipy.stats import ks_2samp
 from collections import defaultdict
-from sklearn.metrics import classification_report
-from sklearn.cluster import KMeans
-from scipy.spatial.distance import cdist
-import warnings
+from sklearn.feature_selection import VarianceThreshold
 
 # Import custom classes
 from data_loader import DataLoader
@@ -20,44 +23,121 @@ from dataPreprocessor import DataPreprocessor
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
+def evaluate_model(model, X_test, y_test, class_names, model_name, filename_prefix):
+    """
+    Evaluate the model and generate performance metrics and plots.
 
-def apply_kmeans_per_class(X, y, samples_per_class):
-    X_core = []
-    y_core = []
-    unique_classes = np.unique(y)
-    
-    for cls in unique_classes:
-        # Get all samples of the current class
-        X_cls = X[y == cls]
-        y_cls = y[y == cls]
-        
-        # If the number of samples is less than or equal to desired samples, take all
-        if len(X_cls) <= samples_per_class:
-            X_core.append(X_cls)
-            y_core.append(y_cls)
-            continue
-        
-        # Apply K-Means clustering
-        kmeans = KMeans(n_clusters=samples_per_class, random_state=42)
-        kmeans.fit(X_cls)
-        cluster_centers = kmeans.cluster_centers_
-        
-        # Find the nearest sample to each cluster center
-        distances = cdist(cluster_centers, X_cls)
-        nearest_indices = np.argmin(distances, axis=1)
-        X_selected = X_cls[nearest_indices]
-        y_selected = y_cls.iloc[nearest_indices]
-        
-        # Append to core set
-        X_core.append(X_selected)
-        y_core.append(y_selected)
-    
-    # Concatenate all classes
-    X_core = np.vstack(X_core)
-    y_core = np.concatenate(y_core)
-    
-    return X_core, y_core
+    Args:
+        model: Trained model to evaluate.
+        X_test: Test feature matrix.
+        y_test: True labels for the test set.
+        class_names: List of class names for plotting.
+        model_name: Name of the model (for titles and print statements).
+        filename_prefix: Prefix for saved plot filenames.
+    Returns:
+        metrics_dict: Dictionary containing evaluation metrics.
+    """
+    print(f"\n=== Evaluating {model_name} ===")
+    y_pred = model.predict(X_test)
 
+    # Calculate metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
+    recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
+    f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+    kappa = cohen_kappa_score(y_test, y_pred)
+    mcc = matthews_corrcoef(y_test, y_pred)
+
+    # Confusion Matrix
+    conf_matrix = confusion_matrix(y_test, y_pred)
+    plt.figure(figsize=(10,7))
+    sns.heatmap(conf_matrix, annot=True, fmt='d', xticklabels=class_names, yticklabels=class_names, cmap='Blues')
+    plt.title(f"Confusion Matrix - {model_name}")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.savefig(f"{filename_prefix}_confusion_matrix.png")
+    plt.close()
+
+    # Classification Report
+    print(f"\nClassification Report for {model_name}:")
+    print(classification_report(y_test, y_pred, target_names=class_names, zero_division=0))
+
+    # Compile metrics
+    metrics_dict = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1,
+        'cohen_kappa': kappa,
+        'mcc': mcc
+    }
+
+    return metrics_dict
+
+def compare_class_distributions(y_full, y_core, class_names):
+    """
+    Compare class distributions between full training set and core set.
+
+    Args:
+        y_full: Labels from the full training set.
+        y_core: Labels from the core set.
+        class_names: List of class names.
+    """
+    plt.figure(figsize=(10,5))
+    sns.countplot(x=y_full, label='Full Training Set', color='blue', alpha=0.6)
+    sns.countplot(x=y_core, label='Core Set', color='red', alpha=0.6)
+    plt.title('Class Distribution: Full Training Set vs. Core Set')
+    plt.xlabel('Classes')
+    plt.ylabel('Count')
+    plt.legend()
+    plt.savefig("class_distribution_comparison.png")
+    plt.close()
+
+def compare_feature_distributions(X_full, X_core, feature_names):
+    """
+    Compare feature distributions between full training set and core set using KS test.
+
+    Args:
+        X_full: Feature matrix from the full training set.
+        X_core: Feature matrix from the core set.
+        feature_names: List of feature names.
+    """
+    p_values = {}
+    for i, feature in enumerate(feature_names):
+        statistic, p_value = ks_2samp(X_full[:, i], X_core[:, i])
+        p_values[feature] = p_value
+    # Features with p-value < 0.05
+    significant_features = [feature for feature, p in p_values.items() if p < 0.05]
+    print(f"Number of features with significantly different distributions: {len(significant_features)}")
+    print("Features with significantly different distributions (p < 0.05):")
+    print(significant_features)
+
+def plot_pca(X_full, X_core, labels=['Full Training', 'Core Set']):
+    """
+    Perform PCA and plot the first two principal components.
+
+    Args:
+        X_full: Feature matrix from the full training set.
+        X_core: Feature matrix from the core set.
+        labels: Labels for the datasets.
+    """
+    from sklearn.decomposition import PCA
+
+    X_combined = np.vstack((X_full, X_core))
+    y_combined = np.array([labels[0]] * X_full.shape[0] + [labels[1]] * X_core.shape[0])
+
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_combined)
+
+    plt.figure(figsize=(10,7))
+    sns.scatterplot(x=X_pca[:X_full.shape[0],0], y=X_pca[:X_full.shape[0],1], label=labels[0], alpha=0.3)
+    sns.scatterplot(x=X_pca[X_full.shape[0]:,0], y=X_pca[X_full.shape[0]:,1], label=labels[1], alpha=0.7)
+    plt.title('PCA Projection of Full Training Set and Core Set')
+    plt.xlabel('PCA Component 1')
+    plt.ylabel('PCA Component 2')
+    plt.legend()
+    plt.savefig("pca_projection.png")
+    plt.close()
 
 def main():
     # Initialize variables to store execution times
@@ -74,7 +154,7 @@ def main():
 
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(16)]
+    nodes = [f'node{i}' for i in range(2)]
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -159,6 +239,7 @@ def main():
 
     # Exclude 'Time' and 'Node' from features
     features_to_exclude = ['Time', 'Node', 'Value']
+    # Add any derived features that are based on 'Time' or 'Node' to this list
 
     # Ensure that the feature columns are the same
     feature_columns_fe = [col for col in data_train_fe.columns if col not in features_to_exclude]
@@ -217,93 +298,48 @@ def main():
     print(f"Variance Threshold feature selection completed in {execution_times['Variance Threshold Feature Selection']:.2f} seconds.")
 
     # ================================
-    # Apply K-Means Clustering per Class
+    # Step 5: Entropy-Driven Sampling Strategy
     # ================================
-    print("\n=== Applying K-Means Clustering per Class ===")
+    print("\n=== Step 5: Entropy-Driven Sampling Strategy ===")
     start_time = time.time()
 
-    samples_per_class = 2000  # Adjust to achieve desired compression
-    X_core_kmeans, y_core_kmeans = apply_kmeans_per_class(X_train_full_var, y_train_full, samples_per_class)
 
-    # Check compression ratio
-    reduction_factor_kmeans = len(X_train_full_var) / len(X_core_kmeans)
-    print(f"Compression Ratio with K-Means: {reduction_factor_kmeans:.2f}")
+    from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
-    # Record execution time
-    end_time = time.time()
-    execution_times['K-Means Clustering'] = end_time - start_time
-    print(f"K-Means clustering completed in {execution_times['K-Means Clustering']:.2f} seconds.")
+    # Define parameter grid (adjust as needed)
+    param_grid = {
+        'n_estimators': [100, 200, 300, 500],
+        'max_depth': [None, 10, 20, 30],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'max_features': ['sqrt', 'log2', None],
+        'criterion': ['gini', 'entropy'],
+        'bootstrap': [True, False],
+        'class_weight': ['balanced', 'balanced_subsample', None]
+    }   
 
-    # ============================
-    # Step 6: Training Random Forest on K-Means Core Set Data
-    # ============================
-    start_time = time.time()
-    print("\n=== Step 6: Training Random Forest on K-Means Core Set Data ===")
+    # Initialize Random Forest
+    rf = RandomForestClassifier(random_state=42, n_jobs=-1)
 
-    # Train Random Forest on the K-Means core set
-    rf_core_kmeans = RandomForestClassifier(
-        n_estimators=200,
-        n_jobs=-1,
-        class_weight='balanced_subsample',
-        max_depth=20,
-        bootstrap=True,
-        random_state=42
+    # Initialize TimeSeriesSplit
+    tscv = TimeSeriesSplit(n_splits=5)
+
+    # Initialize RandomizedSearchCV for full model
+    random_search_full = RandomizedSearchCV(
+        estimator=rf,
+        param_distributions=param_grid,
+        n_iter=50,
+        cv=tscv,
+        scoring='accuracy',
+        random_state=42,
+        n_jobs=-1
     )
-    print("Training Random Forest on K-Means core set...")
-    rf_core_kmeans.fit(X_core_kmeans, y_core_kmeans)
 
-    # Evaluate the model
-    y_pred_core_kmeans = rf_core_kmeans.predict(X_test_full_var)
-    print("\nClassification Report (K-Means Core Set Model on Test Data):")
-    print(classification_report(y_test_full, y_pred_core_kmeans, target_names=class_names, zero_division=0))
+    # Fit on full training data
+    random_search_full.fit(X_train_full_var, y_train_full)
 
-    # Record execution time
-    end_time = time.time()
-    execution_times['Training on K-Means Core Set'] = end_time - start_time
-    print(f"Random Forest trained and evaluated on K-Means core set in {execution_times['Training on K-Means Core Set']:.2f} seconds.")
-
-    # Summarize results
-    core_kmeans_accuracy = rf_core_kmeans.score(X_test_full_var, y_test_full)
-    print(f"K-Means Core Model Test Accuracy: {core_kmeans_accuracy:.4f}")
-
-    # =========================
-    # Step 7: Comparison of Models
-    # =========================
-    print("\n=== Step 7: Comparison of Models ===")
-
-    # Evaluate the original model on the test data with variance-thresholded features
-    y_pred_full = rf_full.predict(X_test_full_var)
-    print("\nClassification Report (Full Model on Test Data):")
-    print(classification_report(y_test_full, y_pred_full, target_names=class_names, zero_division=0))
-
-    # Summarize results
-    full_model_accuracy = rf_full.score(X_test_full_var, y_test_full)
-    print("\nSummary of Results:")
-    print(f"Full Model Test Accuracy: {full_model_accuracy:.4f}")
-    print(f"K-Means Core Model Test Accuracy: {core_kmeans_accuracy:.4f}")
-    print(f"Compression Ratio with K-Means: {reduction_factor_kmeans:.2f}")
-
-    # =========================
-    # Step 8: Statistical Comparison and Summary
-    # =========================
-    print("\n=== Step 8: Statistical Comparison and Summary ===")
-
-    # Feature count and data size
-    full_data_feature_count = X_train_full_var.shape[1]
-    core_data_feature_count = X_core_kmeans.shape[1]
-
-    summary_df = pd.DataFrame({
-        'Dataset': ['Full Data', 'K-Means Core Set'],
-        'Samples': [X_train_full_var.shape[0], X_core_kmeans.shape[0]],
-        'Accuracy': [full_model_accuracy, core_kmeans_accuracy],
-        'Compression Ratio': [1, round(reduction_factor_kmeans, 2)],
-        'Data Size (KB)': [X_train_full_var.nbytes / 1024, X_core_kmeans.nbytes / 1024],
-        'Number of Features': [full_data_feature_count, core_data_feature_count]
-    })
-
-    print("\n=== Summary Table ===")
-    print(summary_df)
-
-
+    # Best parameters for full model
+    print("Best parameters for full model: ", random_search_full.best_params_)
+    print("Best score for full model: ", random_search_full.best_score_)
 if __name__ == '__main__':
     main()

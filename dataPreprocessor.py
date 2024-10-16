@@ -18,26 +18,9 @@ class DataPreprocessor:
     def feature_engineering(self):
         """Create features such as lagged values and differences based on seconds."""
         logging.info("Starting feature engineering")
-        
+
         # Log the initial shape of the data
         print(f"Initial data shape: {self.data.shape}")
-
-        # Ensure data is sorted by 'Node' and 'Time'
-        self.data.sort_values(by=['Node', 'Time'], inplace=True)
-        self.data.reset_index(drop=True, inplace=True)
-        
-        # Lag and diff features per 'Node'
-        for lag in range(1, 10):
-            self.data[f'lag_{lag}'] = self.data.groupby('Node')['Value'].shift(lag)
-            self.data[f'diff_{lag}'] = self.data.groupby('Node')['Value'].diff(lag)     
-
-        # Do not fill missing values to avoid data leakage
-        # Alternatively, handle missing values carefully
-        # For training data
-        if self.data['lag_1'].isnull().any():
-            self.data['lag_1'].fillna(method='bfill', inplace=True)
-        # For test data, do not use any values from training data
-        # Leave NaNs as is or fill with a constant value if appropriate
 
         if self.data.empty:
             self.data.to_csv("empty_data_snapshot.csv", index=False)
@@ -47,6 +30,7 @@ class DataPreprocessor:
 
         logging.info("Feature engineering completed")
         return self.data
+
 
 
     def select_features(self, X, y, k=300):

@@ -24,71 +24,24 @@ from sklearn.linear_model import LogisticRegression
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-import gc
-gc.enable()
+def main():
+    # Initialize variables to store execution times
+    execution_times = {}
 
-def cache_step(step_name, params, output_data=None, load_only=False):
-    """
-    Utility function to handle caching of steps.
-    - step_name: Name of the step, used to identify cache files.
-    - params: Dictionary of parameters used in the step.
-    - output_data: Data to be saved (if any).
-    - load_only: If True, only attempts to load data, does not save.
-    Returns:
-    - output_data if loading or after saving.
-    """
-    import os
-    import pickle
-    import hashlib
+    # Define class names, including 'None' as the 7th label
+    class_names = ['Kripke', 'AMG', 'PENNANT', 'linpack', 'LAMMPS', 'Quicksilver', 'None']
 
-    cache_dir = 'cache'
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
-
-    # Create a unique filename based on step name and parameters
-    params_str = str(sorted(params.items()))
-    params_hash = hashlib.md5(params_str.encode()).hexdigest()
-    cache_filename = os.path.join(cache_dir, f"{step_name}_{params_hash}.pkl")
-    params_filename = os.path.join(cache_dir, f"{step_name}_{params_hash}_params.pkl")
-
-    if os.path.exists(cache_filename):
-        # Load cached data
-        with open(cache_filename, 'rb') as f:
-            output_data = pickle.load(f)
-        print(f"Loaded cached data for {step_name} with matching parameters.")
-        return output_data
-    else:
-        if load_only:
-            print(f"No cached data found for {step_name} with these parameters.")
-            return None
-        else:
-            # Save output_data and params
-            with open(cache_filename, 'wb') as f:
-                pickle.dump(output_data, f)
-            with open(params_filename, 'wb') as f:
-                pickle.dump(params, f)
-            print(f"Saved data for {step_name} with parameters to cache.")
-            return output_data
-
-def step1_data_loading_and_merging(responses_path, sensors_path, nodes):
-    import time
+    # ================================
+    # Step 1: Data Loading and Merging
+    # ================================
     start_time = time.time()
     print("\n=== Step 1: Data Loading and Merging ===")
 
-    # Define parameters
-    params = {
-        'responses_path': responses_path,
-        'sensors_path': sensors_path,
-        'nodes': nodes
-    }
-
-    # Try to load cached data
-    data_final = cache_step('step1', params, load_only=True)
-    if data_final is not None:
-        return data_final
-
-    # If no cached data, execute step
+    responses_path = '../responses'
+    sensors_path = '../sensors'
+    nodes = [f'node{i}' for i in range(16)]
     print(f"Length of Nodes: {len(nodes)}")
+
     data_loader = DataLoader(responses_path, sensors_path, nodes)
     # Load responses with adjustments to read 'None' as a string
     responses = data_loader.load_responses(na_values=[], keep_default_na=False)
@@ -130,40 +83,16 @@ def step1_data_loading_and_merging(responses_path, sensors_path, nodes):
     # Merge with labels
     data_final = pd.merge(data_pivot, labels, on='Time')
 
-    # Save data to cache
-    data_final = cache_step('step1', params, output_data=data_final)
-
-    end_time = time.time()
-    print(f"Step 1 completed in {end_time - start_time:.2f} seconds.")
-
-    return data_final
-
-def step2_time_based_splitting(data_final, split_ratio=0.8):
-    import time
-    import hashlib
-    start_time = time.time()
+    # ================================
+    # Step 2: Time-Based Splitting
+    # ================================
     print("\n=== Step 2: Time-Based Splitting ===")
 
-    # Define parameters
-    # We can create a hash of data_final
-    data_hash = hashlib.md5(pd.util.hash_pandas_object(data_final, index=True).values).hexdigest()
-    params = {
-        'data_hash': data_hash,
-        'split_ratio': split_ratio
-    }
-
-    # Try to load cached data
-    cache_result = cache_step('step2', params, load_only=True)
-    if cache_result is not None:
-        data_train, data_test = cache_result
-        return data_train, data_test
-
-    # If no cached data, execute step
     # Sort data by time
     data_final = data_final.sort_values('Time').reset_index(drop=True)
 
     # Determine split index
-    split_index = int(len(data_final) * split_ratio)
+    split_index = int(len(data_final) * 0.8)
 
     # Split data
     data_train = data_final.iloc[:split_index].reset_index(drop=True)
@@ -171,37 +100,15 @@ def step2_time_based_splitting(data_final, split_ratio=0.8):
     print("Training Data Shape:", data_train.shape)
     print("Test Data Shape:", data_test.shape)
 
-    # Save to cache
-    cache_step('step2', params, output_data=(data_train, data_test))
-
-    end_time = time.time()
-    print(f"Step 2 completed in {end_time - start_time:.2f} seconds.")
-
-    return data_train, data_test
-
-def step3_data_preparation_and_normalization(data_train, data_test, features_to_exclude=['Time', 'Value']):
-    import time
-    import hashlib
-    start_time = time.time()
+    # ================================
+    # Step 3: Data Preparation and Normalization
+    # ================================
     print("\n=== Step 3: Data Preparation and Normalization ===")
 
-    # Define parameters
-    # Hash of data_train and data_test, features_to_exclude
-    data_train_hash = hashlib.md5(pd.util.hash_pandas_object(data_train, index=True).values).hexdigest()
-    data_test_hash = hashlib.md5(pd.util.hash_pandas_object(data_test, index=True).values).hexdigest()
-    params = {
-        'data_train_hash': data_train_hash,
-        'data_test_hash': data_test_hash,
-        'features_to_exclude': features_to_exclude
-    }
-
-    # Try to load cached data
-    cache_result = cache_step('step3', params, load_only=True)
-    if cache_result is not None:
-        X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns = cache_result
-        return X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns
-
     # Exclude 'Time' from features
+    features_to_exclude = ['Time', 'Value']
+    # Add any derived features that are based on 'Time' to this list
+
     feature_columns = [col for col in data_train.columns if col not in features_to_exclude]
 
     # Separate features and labels
@@ -216,35 +123,19 @@ def step3_data_preparation_and_normalization(data_train, data_test, features_to_
     X_train_full_scaled = scaler.fit_transform(X_train_full)
     X_test_full_scaled = scaler.transform(X_test_full)
 
-    # Save to cache
-    cache_step('step3', params, output_data=(X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns))
-
+    # Record execution time
     end_time = time.time()
-    print(f"Step 3 completed in {end_time - start_time:.2f} seconds.")
+    execution_times['Data Preparation and Normalization'] = end_time - start_time
+    print(f"Data preparation and normalization completed in {execution_times['Data Preparation and Normalization']:.2f} seconds.")
 
-    return X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns
-
-def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1):
-    import time
-    import hashlib
-    start_time = time.time()
+    # ================================
+    # Step 4: Variance Threshold Feature Selection
+    # ================================
     print("\n=== Step 4: Variance Threshold Feature Selection ===")
-
-    # Define parameters
-    # Hash of X_train_full_scaled
-    X_train_full_scaled_hash = hashlib.md5(np.ascontiguousarray(X_train_full_scaled)).hexdigest()
-    params = {
-        'X_train_full_scaled_hash': X_train_full_scaled_hash,
-        'variance_threshold': variance_threshold
-    }
-
-    # Try to load cached data
-    cache_result = cache_step('step4', params, load_only=True)
-    if cache_result is not None:
-        X_train_full_var, X_test_full_var, selected_variance_feature_names = cache_result
-        return X_train_full_var, X_test_full_var, selected_variance_feature_names
+    start_time = time.time()
 
     # Initialize the variance threshold selector
+    variance_threshold = 0.1  # Adjust as needed
     selector = VarianceThreshold(threshold=variance_threshold)
 
     # Fit and transform the training data
@@ -259,50 +150,10 @@ def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_
     print(f"Number of features before Variance Threshold: {X_train_full_scaled.shape[1]}")
     print(f"Number of features after Variance Threshold: {X_train_full_var.shape[1]}")
 
-    # Save to cache
-    cache_step('step4', params, output_data=(X_train_full_var, X_test_full_var, selected_variance_feature_names))
-
+    # Record execution time
     end_time = time.time()
-    print(f"Step 4 completed in {end_time - start_time:.2f} seconds.")
-
-    return X_train_full_var, X_test_full_var, selected_variance_feature_names
-
-def main():
-    # Initialize variables to store execution times
-    execution_times = {}
-
-    # Define class names, including 'None' as the 7th label
-    class_names = ['Kripke', 'AMG', 'PENNANT', 'linpack', 'LAMMPS', 'Quicksilver', 'None']
-
-    # Parameters for steps
-    responses_path = '../responses'
-    sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(4)]
-
-    # ================================
-    # Step 1: Data Loading and Merging
-    # ================================
-    data_final = step1_data_loading_and_merging(responses_path, sensors_path, nodes)
-
-    # ================================
-    # Step 2: Time-Based Splitting
-    # ================================
-    data_train, data_test = step2_time_based_splitting(data_final, split_ratio=0.8)
-
-    # ================================
-    # Step 3: Data Preparation and Normalization
-    # ================================
-    X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns = step3_data_preparation_and_normalization(
-        data_train, data_test, features_to_exclude=['Time', 'Value']
-    )
-
-    # ================================
-    # Step 4: Variance Threshold Feature Selection
-    # ================================
-    X_train_full_var, X_test_full_var, selected_variance_feature_names = step4_variance_threshold_feature_selection(
-        X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1
-    )
-
+    execution_times['Variance Threshold Feature Selection'] = end_time - start_time
+    print(f"Variance Threshold feature selection completed in {execution_times['Variance Threshold Feature Selection']:.2f} seconds.")
 
     # ================================
     # Optimized Entropy-Driven Sampling Strategy with Predictive Uncertainties
@@ -557,6 +408,7 @@ def main():
         class_names=class_names
     )
 
+
     # =========================
     # Step 9: Statistical Validation of Compression
     # =========================
@@ -674,8 +526,8 @@ def main():
     # Convert logs to DataFrame
     similarity_logs_df = pd.DataFrame(similarity_logs)
 
-    # Save logs to a CSV file
-    similarity_logs_df.to_csv('feature_similarity_logs.csv', index=False)
+    # Save logs to a CSV file (named with node count )
+    similarity_logs_df.to_csv(f'feature_similarity_logs_{len(nodes)}.csv', index=False)
     print("\nFeature similarity logs saved to 'feature_similarity_logs.csv'.")
 
     # 3. Display the logs
@@ -698,6 +550,8 @@ def main():
     execution_times['Feature Similarity Logging'] = end_time - start_time
     print(f"Feature similarity logging completed in {execution_times['Feature Similarity Logging']:.2f} seconds.")
     #benchmark.cross_validation_checks(rf_core)
+
+
 
 if __name__ == '__main__':
     main()

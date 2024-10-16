@@ -50,6 +50,8 @@ class DataPreprocessor:
             self.data.to_csv("empty_data_snapshot.csv", index=False)
             raise ValueError("Data is empty after feature engineering. Check data processing steps.")
 
+        # Save lagged and difference features to a new CSV file
+        self.data.to_csv('data_with_lag_diff.csv', index=False)
         logging.info("Feature engineering completed")
         return self.data
 

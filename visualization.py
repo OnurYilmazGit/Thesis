@@ -5,7 +5,13 @@ from pandas.plotting import lag_plot
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-
+from sklearn.model_selection import learning_curve
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 class Visualization:
     def __init__(self):
@@ -264,36 +270,71 @@ class Visualization:
         plt.title(title)
         plt.show()
 
-from sklearn.manifold import TSNE
+    
 
-def plot_tsne(X_full, X_core, y_full, y_core, class_names, filename):
-    """Function to plot t-SNE visualization comparing full and core datasets."""
-    print("\n=== Step 8: t-SNE Visualization ===")
-    
-    # Initialize t-SNE for 2D visualization
-    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
-    
-    # Fit t-SNE on full and core datasets
-    X_full_tsne = tsne.fit_transform(X_full)
-    X_core_tsne = tsne.fit_transform(X_core)
-    
-    # Create a figure for t-SNE comparison
-    plt.figure(figsize=(10, 8))
+    def plot_tsne(X_full, X_core, y_full, y_core, class_names, filename):
+        """Function to plot t-SNE visualization comparing full and core datasets."""
+        print("\n=== Step 8: t-SNE Visualization ===")
+        
+        # Initialize t-SNE for 2D visualization
+        tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+        
+        # Fit t-SNE on full and core datasets
+        X_full_tsne = tsne.fit_transform(X_full)
+        X_core_tsne = tsne.fit_transform(X_core)
+        
+        # Create a figure for t-SNE comparison
+        plt.figure(figsize=(10, 8))
 
-    # Plot t-SNE for full dataset
-    plt.scatter(X_full_tsne[:, 0], X_full_tsne[:, 1], c=y_full, cmap='tab10', alpha=0.4, label="Full Dataset", s=10)
+        # Plot t-SNE for full dataset
+        plt.scatter(X_full_tsne[:, 0], X_full_tsne[:, 1], c=y_full, cmap='tab10', alpha=0.4, label="Full Dataset", s=10)
 
-    # Overlay t-SNE for core dataset
-    plt.scatter(X_core_tsne[:, 0], X_core_tsne[:, 1], c=y_core, cmap='tab10', edgecolor='black', label="Core Dataset", s=40)
-    
-    # Add title and legend
-    plt.title("t-SNE Visualization of Full and Core Datasets")
-    plt.legend(loc='best')
-    plt.xlabel('t-SNE Component 1')
-    plt.ylabel('t-SNE Component 2')
-    
-    # Save the figure
-    plt.savefig(filename)
-    plt.close()
+        # Overlay t-SNE for core dataset
+        plt.scatter(X_core_tsne[:, 0], X_core_tsne[:, 1], c=y_core, cmap='tab10', edgecolor='black', label="Core Dataset", s=40)
+        
+        # Add title and legend
+        plt.title("t-SNE Visualization of Full and Core Datasets")
+        plt.legend(loc='best')
+        plt.xlabel('t-SNE Component 1')
+        plt.ylabel('t-SNE Component 2')
+        
+        # Save the figure
+        plt.savefig(filename)
+        plt.close()
 
-    print(f"t-SNE plot saved as {filename}")
+        print(f"t-SNE plot saved as {filename}")
+
+
+    def visualize_tsne_with_pca(X, y, n_components_pca=30, n_components_tsne=2, perplexity=30, n_iter=500):
+        """
+        Visualizes the dataset using PCA + t-SNE.
+        
+        Args:
+            X: The feature matrix.
+            y: The target labels.
+            n_components_pca: Number of components for PCA.
+            n_components_tsne: Number of dimensions for t-SNE (default is 2 for 2D visualization).
+            perplexity: Controls the number of neighbors used in t-SNE.
+            n_iter: Number of iterations for optimization.
+        """
+        print("\n=== Applying PCA ===")
+        # Apply PCA to reduce dimensionality
+        pca = PCA(n_components=n_components_pca)
+        X_pca = pca.fit_transform(X)
+        print(f"Reduced dimensions from {X.shape[1]} to {n_components_pca} using PCA.")
+        
+        print("\n=== Visualizing t-SNE after PCA ===")
+        # Apply t-SNE on PCA-reduced data
+        tsne = TSNE(n_components=n_components_tsne, perplexity=perplexity, n_iter=n_iter, n_jobs=-1)
+        X_tsne = tsne.fit_transform(X_pca)
+
+        # Plot the t-SNE results
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(x=X_tsne[:, 0], y=X_tsne[:, 1], hue=y, palette="deep", legend="full", alpha=0.7)
+        plt.title(f"t-SNE Visualization after PCA ({n_components_pca} components)")
+        plt.xlabel("t-SNE Component 1")
+        plt.ylabel("t-SNE Component 2")
+        plt.legend(title="Classes", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.savefig("tsne_with_pca_visualization.png")
+        plt.show()
