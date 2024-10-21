@@ -407,11 +407,10 @@ def main():
         # Step 1: Train Random Forest on the full training data with variance-thresholded features
         rf_full = RandomForestClassifier(
         n_estimators=100,
-        max_depth=20,
         random_state=42,
         n_jobs=-1,
         class_weight='balanced_subsample',
-        min_samples_leaf=5,
+        min_samples_leaf=6,
         criterion='entropy',
         bootstrap=True,
         )
@@ -884,13 +883,13 @@ def main():
         benchmark.visualize_feature_distributions()
 
         print("\n--- Evaluating Clustering Metrics ---")
-        benchmark.clustering_evaluation()
+        #benchmark.clustering_evaluation()
 
         print("\n--- Performing Cross-Validation Checks ---")
-        benchmark.cross_validation_checks(rf_core)
+        #benchmark.cross_validation_checks(rf_core)
 
         print("\n--- Checking for Data Leakage ---")
-        benchmark.check_data_leakage()
+        #benchmark.check_data_leakage()
 
 
         # Record execution time

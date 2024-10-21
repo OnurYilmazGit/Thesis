@@ -6,6 +6,7 @@ import hashlib
 import warnings
 import gc
 from datetime import datetime
+from sklearn.decomposition import PCA
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,6 @@ import seaborn as sns
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     classification_report,
@@ -32,8 +32,11 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.cluster import MiniBatchKMeans
+from scipy.spatial.distance import cdist
 
-from scipy.special import entr
+from benchmarking2 import Benchmarking
+
 from scipy.stats import (
     ks_2samp,
     chi2_contingency,
@@ -51,6 +54,25 @@ gc.enable()
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
+
+# =============================
+# Define label_to_class Globally
+# =============================
+label_to_class = {
+    0: 'None',
+    1: 'pagefail',
+    2: 'leak',
+    3: 'ddot',
+    4: 'memeater',
+    5: 'dial',
+    6: 'cpufreq',
+    7: 'copy',
+    8: 'ioerr'
+}
+
+# For reporting purposes, create a list of class names ordered by label
+class_names = [label_to_class[i] for i in sorted(label_to_class.keys())]
+
 
 class TeeOutput:
     def __init__(self, node_count):
@@ -85,6 +107,7 @@ class TeeOutput:
     def close(self):
         # Close the file when done
         self.file.close()
+
 
 def cache_step(step_name, params, output_data=None, load_only=False):
     """
@@ -124,6 +147,7 @@ def cache_step(step_name, params, output_data=None, load_only=False):
                 pickle.dump(params, f)
             print(f"Saved data for {step_name} with parameters to cache.")
             return output_data
+
 
 def step1_data_loading_and_merging(responses_path, sensors_path, nodes):
     start_time = time.time()
@@ -206,6 +230,7 @@ def step1_data_loading_and_merging(responses_path, sensors_path, nodes):
 
     return data_final
 
+
 def step2_stratified_splitting(data_final, test_size=0.2, random_state=42):
     start_time = time.time()
     print("\n=== Step 2: Stratified Splitting ===")
@@ -246,6 +271,7 @@ def step2_stratified_splitting(data_final, test_size=0.2, random_state=42):
     print(f"Step 2 completed in {end_time - start_time:.2f} seconds.")
 
     return data_train, data_test
+
 
 def step3_data_preparation_and_normalization(data_train, data_test, features_to_exclude=['Time', 'Value']):
     start_time = time.time()
@@ -296,7 +322,8 @@ def step3_data_preparation_and_normalization(data_train, data_test, features_to_
 
     return X_train_full_scaled, X_test_full_scaled, y_train_full, y_test_full, feature_columns
 
-def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.1):
+
+def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_scaled, feature_columns, variance_threshold=0.0001):
     start_time = time.time()
     print("\n=== Step 4: Variance Threshold Feature Selection ===")
 
@@ -341,6 +368,159 @@ def step4_variance_threshold_feature_selection(X_train_full_scaled, X_test_full_
     print(f"Step 4 completed in {end_time - start_time:.2f} seconds.")
 
     return X_train_full_var, X_test_full_var, selected_variance_feature_names
+
+
+def step5_kmeans_clustering(X_train_full_var, y_train_full, num_clusters=200, batch_size=1024, random_state=42):
+    """
+    Step 5: KMeans Clustering for Core Dataset Selection
+    Selects a representative core set using KMeans clustering.
+    """
+    start_time = time.time()
+    print("\n=== Step 5: KMeans Clustering for Core Dataset Selection ===")
+
+    # Define parameters for caching
+    params = {
+        'num_clusters': num_clusters,
+        'batch_size': batch_size,
+        'random_state': random_state
+    }
+
+    # Try to load cached core set
+    cache_result = cache_step('step5_kmeans_clustering', params, load_only=True)
+    if cache_result is not None:
+        X_core, y_core = cache_result
+        print("Loaded cached core set from KMeans clustering.")
+        end_time = time.time()
+        print(f"Step 5 completed in {end_time - start_time:.2f} seconds.")
+        return X_core, y_core
+
+    # Apply KMeans clustering
+    print(f"Number of clusters: {num_clusters}")
+    kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=batch_size, random_state=random_state)
+    kmeans.fit(X_train_full_var)
+
+    # Find the closest data point in each cluster to the cluster centroid
+    cluster_centers = kmeans.cluster_centers_
+    labels = kmeans.labels_
+
+    # Compute distances from each point to its cluster center
+    # Efficient computation using NumPy broadcasting
+    closest_indices = []
+    for i in range(num_clusters):
+        cluster_indices = np.where(labels == i)[0]
+        if len(cluster_indices) == 0:
+            continue
+        cluster_points = X_train_full_var[cluster_indices]
+        distances = np.linalg.norm(cluster_points - cluster_centers[i], axis=1)
+        closest_index = cluster_indices[np.argmin(distances)]
+        closest_indices.append(closest_index)
+
+    # Create the Core Dataset
+    X_core = X_train_full_var[closest_indices]
+    y_core = y_train_full.iloc[closest_indices].reset_index(drop=True)
+
+    # Print the Class Distribution in the Core Set
+    class_distribution_core = y_core.value_counts(normalize=True).sort_index()
+    print("\nClass distribution in core set (proportion):")
+    for label, proportion in class_distribution_core.items():
+        print(f"Class {label} ({label_to_class[label]}): {proportion:.6f}")
+
+    # Also print counts
+    print("\nClass counts in core set:")
+    print(y_core.value_counts().sort_index())
+
+    # Check Core Set Size and Compression Ratio
+    core_set_size = X_core.nbytes / 1024  # in KB
+    reduction_factor = len(X_train_full_var) / len(X_core)
+    print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
+    print(f"Full set size: {X_train_full_var.nbytes / 1024:.2f} KB")
+
+    # Save the core set to cache
+    cache_step('step5_kmeans_clustering', params, output_data=(X_core, y_core))
+
+    # Record execution time
+    end_time = time.time()
+    execution_times['KMeans Clustering'] = end_time - start_time
+    print(f"KMeans clustering completed in {execution_times['KMeans Clustering']:.2f} seconds.")
+
+    return X_core, y_core
+
+
+def step6_training_models_on_core_set(X_core, y_core, X_test_full_var, y_test_full, class_names):
+    """
+    Step 6: Training Models on Core Set Data
+    Trains specified models on the core set and evaluates them on the test set.
+    """
+    start_time = time.time()
+    print("\n=== Step 6: Training Models on Core Set Data ===")
+
+    # Initialize models with class_weight='balanced_subsample' to handle class imbalance
+    models = {
+        'Random Forest': RandomForestClassifier(
+            n_estimators=100,
+            n_jobs=-1,
+            class_weight='balanced_subsample',
+            bootstrap=True,
+            random_state=42
+        )
+        # You can add more models here if needed
+    }
+
+    model_performance = {}
+
+    for model_name, model in models.items():
+        print(f"\nTraining {model_name} on core set...")
+        model.fit(X_core, y_core)
+        y_pred = model.predict(X_test_full_var)
+        accuracy = accuracy_score(y_test_full, y_pred)
+        f1 = f1_score(y_test_full, y_pred, average='weighted')
+        model_performance[model_name] = {
+            'Model': model,
+            'Accuracy': accuracy,
+            'F1-Score': f1,
+            'Predictions': y_pred
+        }
+        print(f"{model_name} Accuracy: {accuracy:.4f}, F1-Score: {f1:.4f}")
+
+        # Classification Report
+        unique_labels = np.unique(y_test_full)
+
+        # Verify that all labels are within the expected range
+        expected_labels = set(label_to_class.keys())
+        actual_labels = set(unique_labels)
+
+        if not actual_labels.issubset(expected_labels):
+            unexpected_labels = actual_labels - expected_labels
+            raise ValueError(f"Unexpected labels found in test set: {unexpected_labels}")
+
+        # Adjust the target names using the dictionary
+        adjusted_target_names = [label_to_class[int(i)] for i in unique_labels]
+
+        # Print the classification report with adjusted target names
+        print(classification_report(y_test_full, y_pred, labels=unique_labels, target_names=adjusted_target_names, zero_division=0))
+
+        # Confusion Matrix
+        cm = confusion_matrix(y_test_full, y_pred, labels=unique_labels)
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=adjusted_target_names, yticklabels=adjusted_target_names)
+        plt.title(f'Confusion Matrix - {model_name}')
+        plt.ylabel('Actual')
+        plt.xlabel('Predicted')
+        plt.show()
+        plt.close()  # Free up memory
+
+    # Record execution time
+    end_time = time.time()
+    execution_times['Training on Core Set'] = end_time - start_time
+    print(f"Models trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
+
+    # Select the Random Forest model trained on the core set for further steps
+    rf_core = model_performance['Random Forest']['Model']
+    y_pred_core = model_performance['Random Forest']['Predictions']
+
+    return rf_core, y_pred_core, model_performance
+
 
 def step6_pca_compression(X_core, X_test_full_var, desired_variance=0.95):
     """
@@ -398,25 +578,12 @@ def step6_pca_compression(X_core, X_test_full_var, desired_variance=0.95):
 
     return X_core_pca, X_test_pca, pca
 
+
+
 def main():
     # Initialize variables to store execution times
+    global execution_times
     execution_times = {}
-
-    # Define class names with explicit label mapping (including 'None')
-    label_to_class = {
-        0: 'None',
-        1: 'pagefail',
-        2: 'leak',
-        3: 'ddot',
-        4: 'memeater',
-        5: 'dial',
-        6: 'cpufreq',
-        7: 'copy',
-        8: 'ioerr'
-    }
-
-    # For reporting purposes, create a list of class names ordered by label
-    class_names = [label_to_class[i] for i in sorted(label_to_class.keys())]
 
     # Parameters for steps
     responses_path = '../responses'
@@ -483,181 +650,39 @@ def main():
         gc.collect()
 
         # ================================
-        # Optimized Entropy-Driven Sampling Strategy with Predictive Uncertainties
+        # Step 5: KMeans Clustering for Core Dataset Selection
         # ================================
-        print("\n=== Optimized Entropy-Driven Sampling Strategy ===")
-        start_time = time.time()
 
-        # Step 1: Train Random Forest on the full training data with variance-thresholded features
-        rf_full = RandomForestClassifier(
-            random_state=42,
-            n_jobs=-1,
-            class_weight='balanced_subsample',
-            criterion='entropy'
+        desired_core_size = len(X_train_full_var) // 100  # Adjust as needed
+
+        X_core, y_core = step5_kmeans_clustering(
+            X_train_full_var, y_train_full, num_clusters=desired_core_size, batch_size=1024, random_state=42
         )
-        
-        print("Training Random Forest on variance-thresholded full training data...")
-        rf_full.fit(X_train_full_var, y_train_full)
-        print("Random Forest training completed.")
-
-        # Step 2: Compute Predictive Uncertainties using Entropy
-        probs = rf_full.predict_proba(X_train_full_var)
-        print("Predicted class probabilities shape:", probs.shape)
-
-        # Compute entropy for each sample
-        predictive_entropies = entr(probs).sum(axis=1)
-        print("Predictive entropies shape:", predictive_entropies.shape)
-
-        # Determine thresholds for high and low uncertainty
-        high_uncertainty_threshold = np.percentile(predictive_entropies, 99)
-        low_uncertainty_threshold = np.percentile(predictive_entropies, 1)
-
-        # Select samples with high and low uncertainty
-        high_uncertainty_indices = np.where(predictive_entropies >= high_uncertainty_threshold)[0]
-        low_uncertainty_indices = np.where(predictive_entropies <= low_uncertainty_threshold)[0]
-
-        # Combine indices to form the core set
-        selected_indices = np.concatenate([high_uncertainty_indices, low_uncertainty_indices])
-
-        # Step 3: Ensure Balanced Class Distribution (Optional: Implement if needed)
-
-        # Step 4: Print the Class Distribution in the Core Set
-        class_distribution_full = y_train_full.value_counts(normalize=True).sort_index()
-        print("\nClass distribution in full dataset (proportion):")
-        for label, proportion in class_distribution_full.items():
-            print(f"Class {label} ({label_to_class[label]}): {proportion:.6f}")
-
-        X_core = X_train_full_var[selected_indices]
-        y_core = y_train_full.iloc[selected_indices].reset_index(drop=True)
-
-        class_distribution_core = y_core.value_counts(normalize=True).sort_index()
-        print("\nClass distribution in core set (proportion):")
-        for label, proportion in class_distribution_core.items():
-            print(f"Class {label} ({label_to_class[label]}): {proportion:.6f}")
-
-        # Also print counts
-        print("\nClass counts in core set:")
-        print(y_core.value_counts().sort_index())
-
-        # Step 5: Check Core Set Size and Compression Ratio
-        core_set_size = X_core.nbytes / 1024  # in KB
-        reduction_factor = len(X_train_full_var) / len(X_core)
-
-        end_time = time.time()
-        execution_times['Optimized Entropy-Driven Sampling'] = end_time - start_time
-        print(f"Optimized entropy-driven sampling completed in {execution_times['Optimized Entropy-Driven Sampling']:.2f} seconds.")
-        print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
-        print(f"Full set size: {X_train_full_var.nbytes / 1024:.2f} KB")
-
-        # Check class distribution in the core set
-        unique, counts = np.unique(y_core, return_counts=True)
-        class_counts = dict(zip(unique, counts))
-        print("Class distribution in core set:", class_counts)
-
-        # Clean up large objects no longer needed
-        del rf_full, probs, predictive_entropies
         gc.collect()
 
         # ============================
         # Step 6: Training Models on Core Set Data
         # ============================
-        start_time = time.time()
-        print("\n=== Step 6: Training Models on Core Set Data ===")
-
-        # Initialize models with class_weight='balanced' to handle class imbalance
-        models = {
-            'Random Forest': RandomForestClassifier(
-                n_estimators=150,
-                n_jobs=-1,
-                random_state=42,
-                class_weight='balanced_subsample',
-                bootstrap=True
-            )
-            # You can add more models here if needed
-        }
-
-        model_performance = {}
-
-        for model_name, model in models.items():
-            print(f"\nTraining {model_name} on core set...")
-            model.fit(X_core, y_core)
-            y_pred = model.predict(X_test_full_var)
-            accuracy = accuracy_score(y_test_full, y_pred)
-            f1 = f1_score(y_test_full, y_pred, average='weighted')
-            model_performance[model_name] = {
-                'Model': model,
-                'Accuracy': accuracy,
-                'F1-Score': f1,
-                'Predictions': y_pred
-            }
-            print(f"{model_name} Accuracy: {accuracy:.4f}, F1-Score: {f1:.4f}")
-
-            # Classification Report
-            unique_labels = np.unique(y_test_full)
-
-            # Verify that all labels are within the expected range
-            expected_labels = set(label_to_class.keys())
-            actual_labels = set(unique_labels)
-
-            if not actual_labels.issubset(expected_labels):
-                unexpected_labels = actual_labels - expected_labels
-                raise ValueError(f"Unexpected labels found in test set: {unexpected_labels}")
-
-            # Adjust the target names using the dictionary
-            adjusted_target_names = [label_to_class[int(i)] for i in unique_labels]
-
-            # Print the classification report with adjusted target names
-            print(classification_report(y_test_full, y_pred, labels=unique_labels, target_names=adjusted_target_names, zero_division=0))
-
-            # Confusion Matrix
-            cm = confusion_matrix(y_test_full, y_pred, labels=unique_labels)
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                        xticklabels=adjusted_target_names, yticklabels=adjusted_target_names)
-            plt.title(f'Confusion Matrix - {model_name}')
-            plt.ylabel('Actual')
-            plt.xlabel('Predicted')
-            plt.show()
-            plt.close()  # Free up memory
-
-        # Record execution time
-        end_time = time.time()
-        execution_times['Training on Core Set'] = end_time - start_time
-        print(f"Models trained and evaluated on core set in {execution_times['Training on Core Set']:.2f} seconds.")
-
-        # Select the Random Forest model trained on the core set for further steps
-        rf_core = model_performance['Random Forest']['Model']
-        y_pred_core = model_performance['Random Forest']['Predictions']
+        rf_core, y_pred_core, model_performance = step6_training_models_on_core_set(
+            X_core, y_core, X_test_full_var, y_test_full, class_names
+        )
+        gc.collect()
 
         # ============================
         # Step 6.5: PCA-Based Compression
         # ============================
-        print("\n=== Step 6.5: PCA-Based Compression ===")
-        start_time = time.time()
-
-        # Verify feature counts before PCA
-        print(f"Shape of X_core before PCA: {X_core.shape}")
-        print(f"Shape of X_test_full_var before PCA: {X_test_full_var.shape}")
-
-        # Apply PCA to the core set
-        X_core_pca, X_test_pca, pca = step6_pca_compression(X_core, X_test_full_var, desired_variance=0.95)
+        X_core_pca, X_test_pca, pca = step6_pca_compression(
+            X_core, X_test_full_var, desired_variance=0.95
+        )
         gc.collect()
 
-        # Verify feature counts after PCA
-        print(f"Shape of X_core_pca: {X_core_pca.shape}")
-        print(f"Shape of X_test_pca: {X_test_pca.shape}")
-
-        end_time = time.time()
-        execution_times['PCA-Based Compression'] = end_time - start_time
-        print(f"PCA-Based compression completed in {execution_times['PCA-Based Compression']:.2f} seconds.")
-
         # ============================
-        # Step 6.6: Training Random Forest on PCA-Compressed Core Set
+        # Step 7: Training Models on PCA-Compressed Core Set
         # ============================
-        print("\n=== Step 6.6: Training Random Forest on PCA-Compressed Core Set ===")
-        start_time_rf = time.time()
+        print("\n=== Step 7: Training Models on PCA-Compressed Core Set ===")
+        start_time_rf_pca = time.time()
 
-        rf_core_pca = RandomForestClassifier(
+        rf_pca = RandomForestClassifier(
             n_estimators=100,
             n_jobs=-1,
             class_weight='balanced_subsample',
@@ -665,54 +690,58 @@ def main():
             random_state=42
         )
         print("Training Random Forest on PCA-compressed core set...")
-        rf_core_pca.fit(X_core_pca, y_core)
-    
+        rf_pca.fit(X_core_pca, y_core)
+
         # Evaluate the model on the test data
-        y_pred_core_pca = rf_core_pca.predict(X_test_pca)
+        y_pred_pca = rf_pca.predict(X_test_pca)
 
         # Adjust target_names based on actual labels present in y_test_full
         labels = np.unique(y_test_full)
-        adjusted_target_names = [label_to_class[int(i)] for i in labels]
+        target_names_adjusted = [label_to_class[int(i)] for i in labels]
 
-        print("\nClassification Report (PCA Compressed Core Set Model on Test Data):")
-        print(classification_report(y_test_full, y_pred_core_pca, labels=labels, target_names=adjusted_target_names, zero_division=0))
-
-        # Confusion Matrix
-        cm_pca = confusion_matrix(y_test_full, y_pred_core_pca, labels=labels)
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm_pca, annot=True, fmt='d', cmap='Oranges',
-                    xticklabels=adjusted_target_names, yticklabels=adjusted_target_names)
-        plt.title('Confusion Matrix - PCA Compressed Core Set Model')
-        plt.ylabel('Actual')
-        plt.xlabel('Predicted')
-        plt.show()
-        plt.close()  # Free up memory
+        print("\nClassification Report (PCA-Compressed Core Set Model on Test Data):")
+        print(classification_report(y_test_full, y_pred_pca, labels=labels, target_names=target_names_adjusted, zero_division=0))
 
         # Record execution time
-        end_time_rf = time.time()
-        execution_times['Training on PCA Compressed Core Set'] = end_time_rf - start_time_rf
-        print(f"Random Forest trained and evaluated on PCA compressed core set in {execution_times['Training on PCA Compressed Core Set']:.2f} seconds.")
+        end_time_rf_pca = time.time()
+        execution_times['Training on PCA Compressed Core Set'] = end_time_rf_pca - start_time_rf_pca
+        print(f"Random Forest trained and evaluated on PCA-compressed core set in {execution_times['Training on PCA Compressed Core Set']:.2f} seconds.")
 
-        # =========================
-        # Step 7: Comparison of Models
-        # =========================
-        print("\n=== Step 7: Comparison of Models ===")
+        # ============================
+        # Step 8: Comparison of Models
+        # ============================
+        print("\n=== Step 8: Comparison of Models ===")
 
-        # Evaluate the original Random Forest model on the test data
-        y_pred_full = rf_core.predict(X_test_full_var)
+        # Initialize the full Random Forest model
+        rf_full = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=20,
+            random_state=42,
+            n_jobs=-1,
+            class_weight='balanced_subsample',
+            min_samples_leaf=5,
+            criterion='entropy',
+            bootstrap=True,
+        )
+
+        # Train the full Random Forest model on the full training data
+        print("\nTraining Full Random Forest Model on Full Training Data...")
+        rf_full.fit(X_train_full_var, y_train_full)
+        print("Training completed.")
+
+        # Evaluate the full Random Forest model on the test data
+        print("Evaluating Full Random Forest Model on Test Data...")
+        y_pred_full = rf_full.predict(X_test_full_var)
         accuracy_full = accuracy_score(y_test_full, y_pred_full)
         f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
+
         print(f"Full Model Accuracy: {accuracy_full:.4f}, F1-Score: {f1_full:.4f}")
 
-        # Classification Report for Full Model
-        print("\nClassification Report (Full Random Forest Model on Test Data):")
-        print(classification_report(y_test_full, y_pred_full, labels=labels, target_names=adjusted_target_names, zero_division=0))
-
         # Confusion Matrix for Full Model
-        cm_full = confusion_matrix(y_test_full, y_pred_full, labels=labels)
-        plt.figure(figsize=(10, 8))
+        cm_full = confusion_matrix(y_test_full, y_pred_full)
+        plt.figure(figsize=(8, 6))
         sns.heatmap(cm_full, annot=True, fmt='d', cmap='Greens',
-                    xticklabels=adjusted_target_names, yticklabels=adjusted_target_names)
+                    xticklabels=class_names, yticklabels=class_names)
         plt.title('Confusion Matrix - Full Random Forest Model')
         plt.ylabel('Actual')
         plt.xlabel('Predicted')
@@ -724,29 +753,32 @@ def main():
         print(f"Full Model Test Accuracy: {accuracy_full:.4f}")
         for model_name, perf in model_performance.items():
             print(f"{model_name} Test Accuracy: {perf['Accuracy']:.4f}")
+        print(f"PCA Compressed Model Test Accuracy: {accuracy_score(y_test_full, y_pred_pca):.4f}")
 
         # =========================
-        # Step 8: Statistical Comparison and Summary
+        # Step 9: Statistical Comparison and Summary
         # =========================
         print("\n=== Step 8: Statistical Comparison and Summary ===")
+        reduction_factor = len(X_train_full_var) / len(X_core)
+        reduction_factor_pca = len(X_train_full_var) / len(X_core_pca)
 
         # Feature count and data size
         full_data_feature_count = X_train_full_var.shape[1]
         core_data_feature_count = X_core.shape[1]
-        pca_data_feature_count = X_core_pca.shape[1]
+        pca_compressed_feature_count = X_core_pca.shape[1]
 
         summary_df = pd.DataFrame({
-            'Dataset': ['Full Data', 'Core Set', 'PCA Compressed Core Set'],
+            'Dataset': ['Full Data', 'Core Set', 'PCA Compressed Core'],
             'Samples': [X_train_full_var.shape[0], X_core.shape[0], X_core_pca.shape[0]],
             'Accuracy': [
+                rf_full.score(X_test_full_var, y_test_full),
                 rf_core.score(X_test_full_var, y_test_full),
-                rf_core.score(X_test_full_var, y_test_full),
-                rf_core_pca.score(X_test_pca, y_test_full)
+                rf_pca.score(X_test_pca, y_test_full)
             ],
             'Compression Ratio': [
                 1,
                 round(reduction_factor, 2),
-                round(full_data_feature_count / pca_data_feature_count, 2)
+                round(reduction_factor_pca, 2)
             ],
             'Data Size (KB)': [
                 X_train_full_var.nbytes / 1024,
@@ -756,7 +788,7 @@ def main():
             'Number of Features': [
                 full_data_feature_count,
                 core_data_feature_count,
-                pca_data_feature_count
+                pca_compressed_feature_count
             ]
         })
 
@@ -777,83 +809,6 @@ def main():
         )
 
         # =========================
-        # Step 9: Statistical Validation of Compression
-        # =========================
-        print("\n=== Step 9: Statistical Validation of Compression ===")
-        start_time = time.time()
-
-        # 1. Compare feature distributions using Kolmogorov-Smirnov test
-        print("\nPerforming Kolmogorov-Smirnov tests on feature distributions...")
-        ks_results = []
-        for i in range(X_train_full_var.shape[1]):
-            # Ensure indices are within the compressed feature range
-            if i < X_core_pca.shape[1]:
-                stat, p_value = ks_2samp(X_train_full_var[:, i], X_core_pca[:, i])
-            else:
-                # If the compressed data has fewer features, compare with zeros or skip
-                stat, p_value = ks_2samp(X_train_full_var[:, i], np.zeros_like(X_train_full_var[:, i]))
-            ks_results.append(p_value)
-        ks_pvalues = np.array(ks_results)
-
-        # Calculate the percentage of features that have similar distributions
-        alpha = 0.05  # Significance level
-        num_features = X_train_full_var.shape[1]
-        num_similar = np.sum(ks_pvalues > alpha)
-        print(f"Number of features with similar distributions: {num_similar}/{num_features}")
-        print(f"Percentage: {num_similar / num_features * 100:.2f}%")
-
-        # 2. Visualize feature distributions for selected features
-        print("\nVisualizing feature distributions for selected features...")
-        feature_indices = np.random.choice(range(num_features), size=5, replace=False)
-        for idx in feature_indices:
-            plt.figure(figsize=(8, 4))
-            sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
-            if idx < X_core_pca.shape[1]:
-                sns.kdeplot(X_core_pca[:, idx], label='PCA Compressed Data', shade=True)
-            plt.title(f'Distribution Comparison for Feature {selected_variance_feature_names[idx]}')
-            plt.legend()
-            plt.show()
-            plt.close()  # Free up memory
-
-        # 3. Compare class distributions using Chi-Square test
-        print("\nComparing class distributions using Chi-Square test...")
-        full_class_counts = y_train_full.value_counts().sort_index()
-        compressed_class_counts = y_core.value_counts().sort_index()
-        contingency_table = pd.DataFrame({
-            'Full Data': full_class_counts,
-            'Compressed Data': compressed_class_counts
-        })
-        chi2, p_value, dof, expected = chi2_contingency(contingency_table)
-        print(f"Chi-Square Statistic: {chi2:.2f}, p-value: {p_value:.4f}")
-        if p_value > alpha:
-            print("Class distributions are similar.")
-        else:
-            print("Class distributions are significantly different.")
-
-        # 4. Visualize data using PCA
-        print("\nVisualizing data using PCA...")
-        # **Use separate PCA models for full and compressed data to avoid feature mismatch**
-        pca_vis_full = PCA(n_components=2, random_state=42)
-        X_full_pca = pca_vis_full.fit_transform(X_train_full_var)
-        
-        pca_vis_compressed = PCA(n_components=2, random_state=42)
-        X_compressed_pca = pca_vis_compressed.fit_transform(X_core_pca)
-        
-        # Plotting
-        plt.figure(figsize=(10, 8))
-        scatter_full = plt.scatter(X_full_pca[:, 0], X_full_pca[:, 1], c=y_train_full, cmap='viridis', alpha=0.1, label='Full Data')
-        scatter_compressed = plt.scatter(X_compressed_pca[:, 0], X_compressed_pca[:, 1], c=y_core, cmap='viridis', edgecolor='k', label='PCA Compressed Data')
-        plt.title('PCA Visualization of Full Data vs. PCA Compressed Data')
-        plt.legend(handles=[scatter_full, scatter_compressed])
-        plt.show()
-        plt.close()  # Free up memory
-
-        # Record execution time
-        end_time = time.time()
-        execution_times['Statistical Validation'] = end_time - start_time
-        print(f"Statistical validation completed in {execution_times['Statistical Validation']:.2f} seconds.")
-
-        # =========================
         # Step 11: Detailed Feature Similarity Logging
         # =========================
         print("\n=== Step 11: Detailed Feature Similarity Logging ===")
@@ -861,7 +816,7 @@ def main():
 
         # 1. Get Feature Importances from the Full Model
         print("\nCalculating feature importances from the full model...")
-        feature_importances = rf_core.feature_importances_
+        feature_importances = rf_full.feature_importances_
 
         # Create a DataFrame for feature importances
         feature_importance_df = pd.DataFrame({
@@ -883,20 +838,23 @@ def main():
         for idx in top_feature_indices:
             feature_name = selected_variance_feature_names[idx]
             # Kolmogorov-Smirnov Test
-            stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], X_core_pca[:, idx] if idx < X_core_pca.shape[1] else 0)
+            if idx < X_core_pca.shape[1]:
+                stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], X_core_pca[:, idx % X_core_pca.shape[1]])
+            else:
+                stat_ks, p_value_ks = ks_2samp(X_train_full_var[:, idx], np.zeros_like(X_train_full_var[:, idx]))
             # Jensen-Shannon Divergence
             hist_full, bin_edges = np.histogram(X_train_full_var[:, idx], bins=50, density=True)
             if idx < X_core_pca.shape[1]:
-                hist_core, _ = np.histogram(X_core_pca[:, idx], bins=bin_edges, density=True)
+                hist_compressed, _ = np.histogram(X_core_pca[:, idx % X_core_pca.shape[1]], bins=bin_edges, density=True)
             else:
-                hist_core = np.zeros_like(hist_full)
+                hist_compressed = np.zeros_like(hist_full)
             # Add a small value to avoid zeros
             hist_full += 1e-8
-            hist_core += 1e-8
-            js_distance = jensenshannon(hist_full, hist_core)
+            hist_compressed += 1e-8
+            js_distance = jensenshannon(hist_full, hist_compressed)
             # Wasserstein Distance
             if idx < X_core_pca.shape[1]:
-                wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], X_core_pca[:, idx])
+                wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], X_core_pca[:, idx % X_core_pca.shape[1]])
             else:
                 wasserstein_dist = wasserstein_distance(X_train_full_var[:, idx], np.zeros_like(X_train_full_var[:, idx]))
             # Append to logs
@@ -912,8 +870,8 @@ def main():
         similarity_logs_df = pd.DataFrame(similarity_logs)
 
         # Save logs to a CSV file
-        similarity_logs_df.to_csv('feature_similarity_logs.csv', index=False)
-        print("\nFeature similarity logs saved to 'feature_similarity_logs.csv'.")
+        similarity_logs_df.to_csv('feature_similarity_logs_pca.csv', index=False)
+        print("\nFeature similarity logs saved to 'feature_similarity_logs_pca.csv'.")
 
         # 3. Display the logs
         print("\nTop Features Similarity Measures:")
@@ -926,7 +884,7 @@ def main():
             plt.figure(figsize=(8, 4))
             sns.kdeplot(X_train_full_var[:, idx], label='Full Data', shade=True)
             if idx < X_core_pca.shape[1]:
-                sns.kdeplot(X_core_pca[:, idx], label='PCA Compressed Data', shade=True)
+                sns.kdeplot(X_core_pca[:, idx % X_core_pca.shape[1]], label='PCA Compressed Data', shade=True)
             plt.title(f'Distribution Comparison for Feature: {feature_name}')
             plt.legend()
             plt.show()
@@ -944,18 +902,18 @@ def main():
         from sys import getsizeof
 
         memory_full = getsizeof(X_train_full_var) / 1024 ** 2  # Convert to MB
-        memory_core = getsizeof(X_core) / 1024 ** 2
-        memory_pca = getsizeof(X_core_pca) / 1024 ** 2
-        time_full = execution_times['Optimized Entropy-Driven Sampling'] + execution_times.get('Training on Core Set', 0)
-        time_core = execution_times.get('Training on Core Set', 0)
-        time_pca = execution_times.get('PCA-Based Compression', 0)
+        memory_compressed = getsizeof(X_core_pca) / 1024 ** 2
+        memory_test_compressed = getsizeof(X_test_pca) / 1024 ** 2
+        time_full = execution_times.get('KMeans Clustering', 0) + execution_times.get('Training on Core Set', 0)
+        time_compressed = execution_times.get('Training on PCA Compressed Core Set', 0)
+        time_full_model = execution_times.get('Training on Core Set', 0) + execution_times.get('Training on PCA Compressed Core Set', 0)
 
         print(f"Memory Usage - Full Dataset: {memory_full:.2f} MB")
-        print(f"Memory Usage - Core Dataset: {memory_core:.2f} MB")
-        print(f"Memory Usage - PCA Compressed Core Dataset: {memory_pca:.2f} MB")
-        print(f"Training Time - Full Model: {time_full:.2f} seconds")
-        print(f"Training Time - Core Model: {time_core:.2f} seconds")
-        print(f"Compression Time - PCA: {time_pca:.2f} seconds")
+        print(f"Memory Usage - PCA Compressed Core Dataset: {memory_compressed:.2f} MB")
+        print(f"Memory Usage - PCA Compressed Test Dataset: {memory_test_compressed:.2f} MB")
+        print(f"Training Time - Core Model: {time_full:.2f} seconds")
+        print(f"Training Time - PCA Compressed Core Model: {time_compressed:.2f} seconds")
+        print(f"Total Training Time: {time_full_model:.2f} seconds")
 
         # =========================
         # Step 13: Benchmarking
@@ -965,13 +923,13 @@ def main():
 
         # Call all benchmarking functions
         print("\n--- Comparing Model Performance ---")
-        benchmark.compare_model_performance(rf_core, rf_core_pca)
+        benchmark.compare_model_performance(rf_full, rf_core, rf_pca)
 
         print("\n--- Performing Statistical Similarity Tests ---")
         benchmark.statistical_similarity_tests()
 
         print("\n--- Comparing Feature Importances ---")
-        benchmark.feature_importance_comparison(rf_core, rf_core_pca)
+        benchmark.feature_importance_comparison(rf_full, rf_core)
 
         print("\n--- Visualizing Feature Distributions ---")
         benchmark.visualize_feature_distributions()
@@ -990,18 +948,20 @@ def main():
         execution_times['Benchmarking'] = end_time - start_time
         print(f"Benchmarking completed in {execution_times['Benchmarking']:.2f} seconds.")
 
+
         # =========================
         # Final Notes
         # =========================
         print("\n=== All Steps Completed ===")
-        print("The code now includes comprehensive visualization, testing, and benchmarking to support your thesis.")
-        
+        print("The code has been modified to use PCA-based compression for dimensionality reduction instead of stratified sampling. You can experiment with different PCA variance thresholds to optimize the balance between compression and model performance.")
+
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
-        # End of your script; restore stdout
+        # Restore stdout
         tee.close()
         sys.stdout = tee.terminal
+
 
 # Ensure that only one main call exists
 if __name__ == '__main__':
