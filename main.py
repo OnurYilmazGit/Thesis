@@ -26,7 +26,6 @@ def plot_confusion_matrix(conf_matrix, class_names, title, filename):
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
-    
 def main():
     # Initialize variables to store execution times
     execution_times = {}
@@ -45,7 +44,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(12)]  # Adjusted node count
+    nodes = [f'node{i}' for i in range(6)]  # Adjusted node count
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -100,7 +99,6 @@ def main():
     
     cumulative_variance = np.cumsum(pca_model.explained_variance_ratio_)
     optimal_components = np.argmax(cumulative_variance >= 0.16) + 1  # +1 because indices start at 0
-    print(cumulative_variance)
     
     print(f"Optimal number of PCA components to retain 30% variance: {optimal_components}")
     
@@ -140,7 +138,7 @@ def main():
     # ==============================================
     print("\n=== Step 5: K-Means Clustering for Core Set Selection ===")
 
-    optimal_k = 150
+    optimal_k = 200
     print(f"Optimal number of clusters determined: {optimal_k}")
 
     core_set = preprocessor.refine_cluster_selection(X_pca, n_clusters=optimal_k, points_per_cluster=15)
@@ -214,27 +212,6 @@ def main():
     print(f"Evaluation of core set model on original full dataset completed in {execution_times['Core Model on Original Full Data']:.2f} seconds.")
     print(f"Accuracy of core set model on original full dataset: {accuracy_core_on_original:.4f}")
     print(f"Mean Squared Error of core set model on original full dataset: {mse_core_on_original:.4f}")
-
-
-    # =============================
-    # Step 9: Visualizing Decomposed Components and Autocorrelation
-    # =============================
-    print("\n=== Step 9: Visualizing Decomposed Components and Autocorrelation ===")
-    
-    # Assuming X_pca[:, 0] is the first PCA component (you can repeat for other components)
-    #visualization = Visualization()
-    
-    # Plot the seasonal decomposition for the first PCA component
-    #visualization.plot_seasonal_decomposition(X_pca[:, 0], frequency=12, title="Seasonality, Trend, and Noise - PCA Component 1")
-    
-    # Plot the autocorrelation for the first PCA component
-    #visualization.plot_autocorrelation(X_pca[:, 0], lags=50, title="Autocorrelation - PCA Component 1")
-    
-    # Plot the partial autocorrelation for the first PCA component
-    #visualization.plot_partial_autocorrelation(X_pca[:, 0], lags=50, title="Partial Autocorrelation - PCA Component 1")
-    
-    # If you want to visualize more PCA components, you can repeat for X_pca[:, 1], X_pca[:, 2], etc.
-    
 
     # =========================
     # Step 9: Summary of Results

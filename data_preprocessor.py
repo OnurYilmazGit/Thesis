@@ -177,24 +177,3 @@ class DataPreprocessor:
         if runtime > time_limit:
             logging.warning(f"Configuration with max_clusters={max_clusters}, points_per_cluster={points_per_cluster} exceeded time limit.")
         return max_clusters, points_per_cluster, accuracy, runtime
-    
-
-    def remove_outliers_iqr(self):
-        """Remove outliers using the IQR method on numeric columns."""
-        print("Removing outliers using the IQR method.")
-
-        # Select only numeric columns
-        numeric_cols = self.data.select_dtypes(include=[np.number])
-
-        # Calculate the IQR for each numeric column
-        Q1 = numeric_cols.quantile(0.25)
-        Q3 = numeric_cols.quantile(0.75)
-        IQR = Q3 - Q1
-
-        # Remove rows that contain outliers
-        self.data = self.data[~((numeric_cols < (Q1 - 1.5 * IQR)) | (numeric_cols > (Q3 + 1.5 * IQR))).any(axis=1)]
-
-        # Reset the index after outlier removal
-        self.data.reset_index(drop=True, inplace=True)
-
-        print(f"Data shape after outlier removal: {self.data.shape}")
