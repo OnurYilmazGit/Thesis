@@ -1,0 +1,174 @@
+
+
+onuryilmaz@MacBook-Pro-von-Onur python_project % python3 kk1_pca.py
+Running process for node count: 1
+
+=== Step 1: Data Loading and Merging ===
+Loaded cached data for step1 with matching parameters.
+
+=== Step 2: Stratified Splitting ===
+Loaded cached data for step2_stratified with matching parameters.
+
+=== Data Integrity Check ===
+Unique labels in training data: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+Unique labels in testing data: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+=== Step 3: Data Preparation and Normalization ===
+Loaded cached data for step3 with matching parameters.
+
+=== Step 4: Variance Threshold Feature Selection ===
+Loaded cached data for step4 with matching parameters.
+
+=== Optimized Entropy-Driven Sampling Strategy ===
+Training Random Forest on variance-thresholded full training data...
+Random Forest training completed.
+Predicted class probabilities shape: (1101048, 9)
+Predictive entropies shape: (1101048,)
+
+Class distribution in full dataset (proportion):
+Class 0 (None): 0.680058
+Class 1 (pagefail): 0.040329
+Class 2 (leak): 0.045659
+Class 3 (ddot): 0.045598
+Class 4 (memeater): 0.041562
+Class 5 (dial): 0.041646
+Class 6 (cpufreq): 0.029602
+Class 7 (copy): 0.042139
+Class 8 (ioerr): 0.033406
+
+Class distribution in core set (proportion):
+Class 0 (None): 0.729282
+Class 1 (pagefail): 0.034521
+Class 2 (leak): 0.040958
+Class 3 (ddot): 0.044327
+Class 4 (memeater): 0.029720
+Class 5 (dial): 0.039127
+Class 6 (cpufreq): 0.029087
+Class 7 (copy): 0.024558
+Class 8 (ioerr): 0.028420
+
+Class counts in core set:
+Value
+0    660725
+1     31276
+2     37108
+3     40160
+4     26926
+5     35449
+6     26353
+7     22249
+8     25748
+Name: count, dtype: int64
+Optimized entropy-driven sampling completed in 276.70 seconds.
+Core set size: 905994 samples (898915.92 KB), Reduction factor: 1.22
+Full set size: 1092446.06 KB
+Class distribution in core set: {0: 660725, 1: 31276, 2: 37108, 3: 40160, 4: 26926, 5: 35449, 6: 26353, 7: 22249, 8: 25748}
+
+=== Step 6: Training Models on Core Set Data ===
+
+Training Random Forest on core set...
+Random Forest Accuracy: 0.9892, F1-Score: 0.9891
+              precision    recall  f1-score   support
+
+        None       0.99      1.00      0.99    187195
+    pagefail       0.99      0.97      0.98     11101
+        leak       0.99      0.99      0.99     12568
+        ddot       0.99      0.99      0.99     12552
+    memeater       0.99      0.99      0.99     11441
+        dial       0.99      0.99      0.99     11464
+     cpufreq       0.99      0.99      0.99      8148
+        copy       0.99      0.92      0.95     11599
+       ioerr       0.98      0.96      0.97      9195
+
+    accuracy                           0.99    275263
+   macro avg       0.99      0.98      0.98    275263
+weighted avg       0.99      0.99      0.99    275263
+
+2024-10-20 16:56:33.108 Python[8088:92852] +[IMKClient subclass]: chose IMKClient_Legacy
+2024-10-20 16:56:33.109 Python[8088:92852] +[IMKInputSession subclass]: chose IMKInputSession_Legacy
+Models trained and evaluated on core set in 1008.57 seconds.
+
+=== Step 6.5: PCA-Based Compression ===
+Shape of X_core before PCA: (905994, 127)
+Shape of X_test_full_var before PCA: (275263, 127)
+
+=== Step 6.5: PCA-Based Compression ===
+Applying PCA to retain 95.0% of variance
+No cached data found for step6_pca_compression with these parameters.
+PCA reduced the feature dimensions from 127 to 28
+Compression Ratio after PCA: 4.54
+Saved data for step6_pca_compression with parameters to cache.
+Step 6.5 completed in 2.50 seconds.
+Shape of X_core_pca: (905994, 28)
+Shape of X_test_pca: (275263, 28)
+PCA-Based compression completed in 2.50 seconds.
+
+=== Step 6.6: Training Random Forest on PCA-Compressed Core Set ===
+Training Random Forest on PCA-compressed core set...
+
+Classification Report (PCA Compressed Core Set Model on Test Data):
+              precision    recall  f1-score   support
+
+        None       0.93      0.99      0.96    187195
+    pagefail       0.91      0.77      0.84     11101
+        leak       0.98      0.92      0.95     12568
+        ddot       0.97      0.97      0.97     12552
+    memeater       0.99      0.96      0.97     11441
+        dial       0.99      0.96      0.97     11464
+     cpufreq       0.97      0.94      0.96      8148
+        copy       0.94      0.47      0.63     11599
+       ioerr       0.89      0.64      0.75      9195
+
+    accuracy                           0.94    275263
+   macro avg       0.95      0.85      0.89    275263
+weighted avg       0.94      0.94      0.93    275263
+
+Random Forest trained and evaluated on PCA compressed core set in 380.02 seconds.
+
+=== Step 7: Comparison of Models ===
+Full Model Accuracy: 0.9949, F1-Score: 0.9949
+
+Classification Report (Full Random Forest Model on Test Data):
+              precision    recall  f1-score   support
+
+        None       1.00      1.00      1.00    187195
+    pagefail       0.99      0.99      0.99     11101
+        leak       0.99      0.99      0.99     12568
+        ddot       0.99      0.99      0.99     12552
+    memeater       0.99      0.99      0.99     11441
+        dial       0.99      0.99      0.99     11464
+     cpufreq       1.00      0.99      0.99      8148
+        copy       0.99      0.99      0.99     11599
+       ioerr       1.00      0.99      0.99      9195
+
+    accuracy                           0.99    275263
+   macro avg       0.99      0.99      0.99    275263
+weighted avg       0.99      0.99      0.99    275263
+
+
+Summary of Results:
+Full Model Test Accuracy: 0.9949
+Random Forest Test Accuracy: 0.9892
+
+=== Step 8: Statistical Comparison and Summary ===
+
+=== Summary Table ===
+                   Dataset  Samples  Accuracy  Compression Ratio  Data Size (KB)  Number of Features
+0                Full Data  1101048  0.994947               1.00    1.092446e+06                 127
+1                 Core Set   905994  0.989185               1.22    8.989159e+05                 127
+2  PCA Compressed Core Set   905994  0.937936               4.54    1.981862e+05                  28
+
+=== Step 9: Statistical Validation of Compression ===
+
+Performing Kolmogorov-Smirnov tests on feature distributions...
+Number of features with similar distributions: 0/127
+Percentage: 0.00%
+
+Visualizing feature distributions for selected features...
+
+Comparing class distributions using Chi-Square test...
+Chi-Square Statistic: 9324.95, p-value: 0.0000
+Class distributions are significantly different.
+
+
+onuryilmaz@MacBook-Pro-von-Onur python_project %
