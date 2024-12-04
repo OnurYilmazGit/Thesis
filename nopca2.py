@@ -34,6 +34,18 @@ def example_usage(X_scaled, X_core, y_scaled, y_core, class_names):
     """
     print("\n=== Benchmarking the Real and Core (Synthetic) Datasets ===")
 
+    # Ensure no NaN values in both datasets before benchmarking
+    if np.isnan(X_scaled).sum() > 0 or np.isnan(X_core).sum() > 0:
+        print(f"Warning: Missing values detected. NaNs in X_scaled: {np.isnan(X_scaled).sum()}, NaNs in X_core: {np.isnan(X_core).sum()}")
+
+        # Impute or fill missing values with the mean
+        from sklearn.impute import SimpleImputer
+        imputer = SimpleImputer(strategy='mean')
+        X_scaled = imputer.fit_transform(X_scaled)
+        X_core = imputer.fit_transform(X_core)
+
+        print(f"Missing values after imputation: X_scaled: {np.isnan(X_scaled).sum()}, X_core: {np.isnan(X_core).sum()}")
+
     # Initialize the benchmark class
     benchmark = Benchmark(X_scaled, X_core, y_scaled, y_core, class_names)
 
@@ -46,7 +58,7 @@ def example_usage(X_scaled, X_core, y_scaled, y_core, class_names):
     benchmark.compare_statistics()
     
     # Optional: you can also call the t-SNE visualization method here if needed:
-    #benchmark.tsne_visualization()
+    # benchmark.tsne_visualization()
 
 
 # Function to plot t-SNE
@@ -86,6 +98,9 @@ def plot_confusion_matrix(conf_matrix, class_names, title, filename):
     plt.savefig(filename)
     plt.close()
 
+
+from sklearn.metrics import classification_report
+
 def main():
     # Initialize variables to store execution times
     execution_times = {}
@@ -93,7 +108,7 @@ def main():
     # Initialize visualization object
     visualization = Visualization()
 
-    # Define class names, including 'none' for idle periods
+    # Define class names, including 'None' for idle periods
     class_names = ['Kripke', 'AMG', 'PENNANT', 'linpack', 'LAMMPS', 'Quicksilver', 'None']
 
     # ================================
@@ -104,7 +119,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(16)]  # Adjusted node count
+    nodes = [f'node{i}' for i in range(4)]  # Adjusted node count
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -117,6 +132,10 @@ def main():
     # Merge data and map labels
     data = pd.merge(sensor_data, responses, on=['Time', 'Node'])
     data['Value'] = data['Value'].map(label_mapping)
+    
+    # Check if idle state (None) exists in the data
+    idle_rows = data[data['Value'] == 0]
+    print(f"Number of rows with idle state: {len(idle_rows)}")
     
     end_time = time.time()
     execution_times['Data Loading and Merging'] = end_time - start_time
@@ -132,7 +151,6 @@ def main():
     preprocessor = DataPreprocessor(data, window_size=20)
     data = preprocessor.feature_engineering()
 
-    # Check if data is empty after feature engineering
     if data.empty:
         print("Error: Data is empty after feature engineering. Saving snapshot for debugging and exiting.")
         data.to_csv('empty_data_snapshot.csv', index=False)
@@ -154,14 +172,15 @@ def main():
     print(f"Original data size: {original_data_size:.2f} KB")
 
     # ==========================================
-    # Step 3: Training Random Forest on Full Data with Additional Metrics
+    # Step 3: Training Random Forest on Full Data with Class Weighting
     # ==========================================
     start_time = time.time()
     print("\n=== Step 3: Training Random Forest on Full Data ===")
 
     X_train_full, X_test_full, y_train_full, y_test_full = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-    rf_full = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+    # Add class_weight='balanced' to handle potential class imbalance (including None class)
+    rf_full = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42, class_weight='balanced')
     rf_full.fit(X_train_full, y_train_full)
 
     y_pred_full = rf_full.predict(X_test_full)
@@ -172,22 +191,36 @@ def main():
     recall_full = recall_score(y_test_full, y_pred_full, average='weighted')
     f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
 
-    # Print additional metrics
     print(f"Accuracy on full test set: {accuracy_full:.4f}")
     print(f"Precision on full test set: {precision_full:.4f}")
     print(f"Recall on full test set: {recall_full:.4f}")
     print(f"F1 Score on full test set: {f1_full:.4f}")
 
-    # Confusion Matrix
-    conf_matrix_full = confusion_matrix(y_test_full, y_pred_full)
-    plot_confusion_matrix(conf_matrix_full, class_names, "Confusion Matrix - Random Forest (Full Data)", "confusion_matrix_full.png")
+    # Get the unique labels in the test set to avoid mismatching the class names
+    unique_labels = np.unique(y_test_full).astype(int)
+
+    # Create a new class name list based on the unique labels in the test set
+    class_names_updated = [class_names[label] for label in unique_labels]
+
+    # Generate the classification report
+    report = classification_report(y_test_full, y_pred_full, target_names=class_names_updated, output_dict=True)
+
+    # Print the metrics for the None class, if present
+    if 'None' in class_names_updated:
+        none_class_metrics = report['None']
+        print(f"\nNone Class Metrics (Idle State):")
+        print(f"Precision: {none_class_metrics['precision']:.4f}")
+        print(f"Recall: {none_class_metrics['recall']:.4f}")
+        print(f"F1 Score: {none_class_metrics['f1-score']:.4f}")
+    else:
+        print("None class (idle state) is not present in the test set.")
 
     end_time = time.time()
     execution_times['Random Forest (Full Data)'] = end_time - start_time
     print(f"Random Forest trained and evaluated in {execution_times['Random Forest (Full Data)']:.2f} seconds.")
 
     # ==============================================
-    # Step 4: K-Means Clustering for Core Set Selection
+    # Step 4: K-Means Clustering for Core Set Selection (No Changes)
     # ==============================================
     print("\n=== Step 4: K-Means Clustering for Core Set Selection ===")
 
@@ -226,7 +259,6 @@ def main():
     recall_core = recall_score(y_test_core, y_pred_core, average='weighted')
     f1_core = f1_score(y_test_core, y_pred_core, average='weighted')
 
-    # Print additional metrics
     print(f"Accuracy on core set test data: {accuracy_core:.4f}")
     print(f"Precision on core set test data: {precision_core:.4f}")
     print(f"Recall on core set test data: {recall_core:.4f}")
@@ -239,6 +271,7 @@ def main():
     end_time = time.time()
     execution_times['Random Forest (Core Set)'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Random Forest (Core Set)']:.2f} seconds.")
+
     # =============================================
     # Step 6: Evaluating Core Set Model on Full Data
     # =============================================
@@ -273,7 +306,7 @@ def main():
     print(summary_df.to_string(index=False))
     print('Compression Ratio as', original_data_size / core_set_size)
 
-    # ========================= Benchamrk Class Usage =========================
+    # ========================= Benchmark Class Usage =========================
     example_usage(X_scaled, X_core, y, y_core, class_names)
 
     # ========================= t-SNE Visualization =========================
@@ -289,8 +322,6 @@ def main():
 
     plt.tight_layout()
     plt.show()
-
-
 
 if __name__ == '__main__':
     main()

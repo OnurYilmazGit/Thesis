@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, mean_squared_error
-from sklearn.manifold import TSNE  # Import for t-SNE
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 
 # Import custom classes
 from data_loader import DataLoader
@@ -18,63 +18,6 @@ from visualization import Visualization
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
-
-from benchmark import Benchmark  # Assuming you have saved the Benchmark class as benchmark.py
-
-def example_usage(X_scaled, X_core, y_scaled, y_core, class_names):
-    """
-    Example usage of the Benchmark class for comparing real and synthetic datasets.
-    
-    Args:
-        X_scaled (ndarray): The real (full) dataset.
-        X_core (ndarray): The synthetic (core) dataset.
-        y_scaled (ndarray): Labels for the real (full) dataset.
-        y_core (ndarray): Labels for the synthetic (core) dataset.
-        class_names (list): List of class names.
-    """
-    print("\n=== Benchmarking the Real and Core (Synthetic) Datasets ===")
-
-    # Initialize the benchmark class
-    benchmark = Benchmark(X_scaled, X_core, y_scaled, y_core, class_names)
-
-    # Step 1: Jensen-Shannon Divergence
-    print("\n=== Step 1: Jensen-Shannon Divergence ===")
-    benchmark.jensen_shannon_divergence()
-
-    # Step 2: Statistical Comparison (Mean and Variance)
-    print("\n=== Step 2: Statistical Comparison ===")
-    benchmark.compare_statistics()
-    
-    # Optional: you can also call the t-SNE visualization method here if needed:
-    #benchmark.tsne_visualization()
-
-
-# Function to plot t-SNE
-def plot_tsne(X_full, X_core, y_full, y_core, class_names):
-    tsne = TSNE(n_components=2, random_state=42)
-    
-    # t-SNE for full dataset
-    X_full_tsne = tsne.fit_transform(X_full)
-    
-    # t-SNE for core dataset
-    X_core_tsne = tsne.fit_transform(X_core)
-    
-    plt.figure(figsize=(12, 6))
-    
-    # Plot full dataset
-    plt.subplot(1, 2, 1)
-    scatter = plt.scatter(X_full_tsne[:, 0], X_full_tsne[:, 1], c=y_full, cmap='viridis', s=2)
-    plt.colorbar(scatter, ticks=range(len(class_names)))
-    plt.title("t-SNE of Full Dataset")
-    
-    # Plot core dataset
-    plt.subplot(1, 2, 2)
-    scatter = plt.scatter(X_core_tsne[:, 0], X_core_tsne[:, 1], c=y_core, cmap='viridis', s=2)
-    plt.colorbar(scatter, ticks=range(len(class_names)))
-    plt.title("t-SNE of Core Set")
-    
-    plt.tight_layout()
-    plt.show()
 
 def plot_confusion_matrix(conf_matrix, class_names, title, filename):
     plt.figure(figsize=(8, 6))
@@ -104,7 +47,7 @@ def main():
     
     responses_path = '../responses'
     sensors_path = '../sensors'
-    nodes = [f'node{i}' for i in range(16)]  # Adjusted node count
+    nodes = [f'node{i}' for i in range(8)]  # Adjusted node count
     print(f"Length of Nodes: {len(nodes)}")
 
     data_loader = DataLoader(responses_path, sensors_path, nodes)
@@ -154,47 +97,41 @@ def main():
     print(f"Original data size: {original_data_size:.2f} KB")
 
     # ==========================================
-    # Step 3: Training Random Forest on Full Data with Additional Metrics
+    # Step 3: Training Random Forest on Full Data
     # ==========================================
     start_time = time.time()
     print("\n=== Step 3: Training Random Forest on Full Data ===")
 
     X_train_full, X_test_full, y_train_full, y_test_full = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-    rf_full = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+    rf_full = RandomForestClassifier(n_estimators=50, n_jobs=-1, random_state=42)
     rf_full.fit(X_train_full, y_train_full)
 
     y_pred_full = rf_full.predict(X_test_full)
-
-    # Calculate additional metrics
     accuracy_full = accuracy_score(y_test_full, y_pred_full)
-    precision_full = precision_score(y_test_full, y_pred_full, average='weighted')
-    recall_full = recall_score(y_test_full, y_pred_full, average='weighted')
-    f1_full = f1_score(y_test_full, y_pred_full, average='weighted')
 
-    # Print additional metrics
-    print(f"Accuracy on full test set: {accuracy_full:.4f}")
-    print(f"Precision on full test set: {precision_full:.4f}")
-    print(f"Recall on full test set: {recall_full:.4f}")
-    print(f"F1 Score on full test set: {f1_full:.4f}")
-
-    # Confusion Matrix
     conf_matrix_full = confusion_matrix(y_test_full, y_pred_full)
     plot_confusion_matrix(conf_matrix_full, class_names, "Confusion Matrix - Random Forest (Full Data)", "confusion_matrix_full.png")
 
     end_time = time.time()
     execution_times['Random Forest (Full Data)'] = end_time - start_time
     print(f"Random Forest trained and evaluated in {execution_times['Random Forest (Full Data)']:.2f} seconds.")
+    print(f"Accuracy on full test set: {accuracy_full:.4f}")
 
     # ==============================================
-    # Step 4: K-Means Clustering for Core Set Selection
+    # Step 4: DBSCAN Clustering for Core Set Selection
     # ==============================================
-    print("\n=== Step 4: K-Means Clustering for Core Set Selection ===")
+    print("\n=== Step 4: DBSCAN Clustering for Core Set Selection ===")
 
-    optimal_k = 200
-    print(f"Optimal number of clusters determined: {optimal_k}")
+    # Apply DBSCAN clustering
+    dbscan = DBSCAN(eps=0.8, min_samples=10, n_jobs=-1)
+    dbscan_labels = dbscan.fit_predict(X_scaled)
 
-    core_set = preprocessor.refine_cluster_selection(X_scaled, n_clusters=optimal_k, points_per_cluster=10)
+    # Add DBSCAN labels to the dataset
+    data['Cluster'] = dbscan_labels
+
+    # Filter out noise points (label == -1)
+    core_set = data[data['Cluster'] != -1]
 
     X_core = X_scaled[core_set.index]
     y_core = core_set['Value']
@@ -208,7 +145,7 @@ def main():
     print(f"Core set size: {X_core.shape[0]} samples ({core_set_size:.2f} KB), Reduction factor: {reduction_factor:.2f}")
 
     # =============================================
-    # Step 5: Training Random Forest on Core Set Data with Additional Metrics
+    # Step 5: Training Random Forest on Core Set Data
     # =============================================
     start_time = time.time()
     print("\n=== Step 5: Training Random Forest on Core Set Data ===")
@@ -219,64 +156,51 @@ def main():
     rf_core.fit(X_train_core, y_train_core)
 
     y_pred_core = rf_core.predict(X_test_core)
-
-    # Calculate additional metrics
     accuracy_core = accuracy_score(y_test_core, y_pred_core)
-    precision_core = precision_score(y_test_core, y_pred_core, average='weighted')
-    recall_core = recall_score(y_test_core, y_pred_core, average='weighted')
-    f1_core = f1_score(y_test_core, y_pred_core, average='weighted')
 
-    # Print additional metrics
-    print(f"Accuracy on core set test data: {accuracy_core:.4f}")
-    print(f"Precision on core set test data: {precision_core:.4f}")
-    print(f"Recall on core set test data: {recall_core:.4f}")
-    print(f"F1 Score on core set test data: {f1_core:.4f}")
-
-    # Confusion Matrix
     conf_matrix_core = confusion_matrix(y_test_core, y_pred_core)
     plot_confusion_matrix(conf_matrix_core, class_names, "Confusion Matrix - Random Forest (Core Set)", "confusion_matrix_core.png")
 
     end_time = time.time()
     execution_times['Random Forest (Core Set)'] = end_time - start_time
     print(f"Random Forest trained and evaluated on core set in {execution_times['Random Forest (Core Set)']:.2f} seconds.")
-    # =============================================
+    print(f"Accuracy on core set test data: {accuracy_core:.4f}")
+
+    # =========================
     # Step 6: Evaluating Core Set Model on Full Data
-    # =============================================
+    # =========================
+    start_time = time.time()
     print("\n=== Step 6: Evaluating Core Set Model on Full Data ===")
 
-    # Predict using the full dataset with the core set model
-    y_pred_full_core = rf_core.predict(X_scaled)  # Use the full dataset (X_scaled) for prediction
-    accuracy_full_core = accuracy_score(y, y_pred_full_core)  # Compare with original full labels (y)
+    y_pred_full_core = rf_core.predict(X_scaled)
+    accuracy_full_core = accuracy_score(y, y_pred_full_core)
 
     conf_matrix_full_core = confusion_matrix(y, y_pred_full_core)
     plot_confusion_matrix(conf_matrix_full_core, class_names, "Confusion Matrix - Core Set Model on Full Data", "confusion_matrix_full_core.png")
 
-    print(f"Accuracy of core set model on full dataset: {accuracy_full_core:.4f}")
+    end_time = time.time()
+    execution_times['Evaluation on Full Data'] = end_time - start_time
+    print(f"Evaluation completed in {execution_times['Evaluation on Full Data']:.2f} seconds.")
+    print(f"Accuracy of core set model on full data: {accuracy_full_core:.4f}")
 
     # =========================
     # Step 7: Summary of Results
     # =========================
     print("\n=== Step 7: Summary of Results ===")
-    
-    # Calculate feature counts
-    full_data_feature_count = X_scaled.shape[1]
-    core_data_feature_count = X_core.shape[1]
-    
+
+    compression_ratio = original_data_size / core_set_size
+
     summary_df = pd.DataFrame({
         'Dataset': ['Full Data', 'Core Set', 'Core Model on Full Data'],
         'Samples': [X_scaled.shape[0], X_core.shape[0], X_scaled.shape[0]],
         'Accuracy': [accuracy_full, accuracy_core, accuracy_full_core],
         'Data Size (KB)': [original_data_size, core_set_size, original_data_size],
-        'Number of Features': [full_data_feature_count, core_data_feature_count, full_data_feature_count]  # Adding feature count
+        'Compression Ratio': [compression_ratio, 'N/A', 'N/A']
     })
-    
+
     print(summary_df.to_string(index=False))
-    print('Compression Ratio as', original_data_size / core_set_size)
 
-    # ========================= Benchamrk Class Usage =========================
-    example_usage(X_scaled, X_core, y, y_core, class_names)
-
-    # ========================= t-SNE Visualization =========================
+    # Display Plots Together
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
     plot_files = ['confusion_matrix_full.png', 'confusion_matrix_core.png', 'confusion_matrix_full_core.png']
     titles = ['Random Forest (Full Data)', 'Random Forest (Core Set)', 'Core Set Model on Full Data']
@@ -289,8 +213,6 @@ def main():
 
     plt.tight_layout()
     plt.show()
-
-
 
 if __name__ == '__main__':
     main()

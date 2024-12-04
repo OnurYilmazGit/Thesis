@@ -1,0 +1,4 @@
+Dataset,Samples,Accuracy,Compression Ratio,Data Size (KB),Number of Features
+Full Data,43428,0.995210904402284,1.0,66499.125,196
+Core Set,37677,0.9959476883403942,1.15,57692.90625,196
+K-Means Core Set,753,0.9879351630134463,57.67,1153.03125,196
