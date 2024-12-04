@@ -1,0 +1,4 @@
+Window Size: 10, Accuracy: 0.9933416295688096, Time: 40.28 seconds
+Window Size: 20, Accuracy: 0.9933416295688096, Time: 39.95 seconds
+Window Size: 30, Accuracy: 0.9933416295688096, Time: 40.61 seconds
+Window Size: 40, Accuracy: 0.9933416295688096, Time: 42.26 seconds
